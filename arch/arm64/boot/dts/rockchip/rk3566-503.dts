@@ -1356,6 +1356,7 @@
 
 &rkvdec {
 	status = "okay";
+	dynamic-power-coefficient = <30>;
 };
 
 &rkvdec_mmu {

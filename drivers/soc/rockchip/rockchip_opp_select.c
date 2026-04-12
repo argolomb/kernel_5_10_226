@@ -2085,9 +2085,14 @@ next:
 				    &scale, &volt_sel);
 	if (info && info->data && info->data->set_soc_info)
 		info->data->set_soc_info(dev, np, bin, process, volt_sel);
-	rockchip_set_opp_prop_name(dev, process, volt_sel);
-	rockchip_set_opp_supported_hw(dev, np, bin, volt_sel);
-	ret = dev_pm_opp_of_add_table(dev);
+	if (dev->of_node &&
+		of_device_is_compatible(dev->of_node, "rockchip,rkv-decoder-rk3568")) {
+		ret = dev_pm_opp_of_add_table(dev);
+	} else {
+		rockchip_set_opp_prop_name(dev, process, volt_sel);
+		rockchip_set_opp_supported_hw(dev, np, bin, volt_sel);
+		ret = dev_pm_opp_of_add_table(dev);
+	}
 	if (ret) {
 		dev_err(dev, "Invalid operating-points in device tree.\n");
 		goto dis_opp_clk;

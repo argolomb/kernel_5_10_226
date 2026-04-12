@@ -849,22 +849,25 @@ static int rkvdec2_devfreq_init(struct mpp_dev *mpp)
 		return 0;
 
 	dec->vdd = devm_regulator_get_optional(mpp->dev, "vdec");
-	if (IS_ERR_OR_NULL(dec->vdd)) {
+	if (IS_ERR(dec->vdd)) {
 		if (PTR_ERR(dec->vdd) == -EPROBE_DEFER) {
 			dev_warn(mpp->dev, "vdec regulator not ready, retry\n");
 
 			return -EPROBE_DEFER;
 		}
-		dev_info(mpp->dev, "no regulator, devfreq is disabled\n");
-
-		return 0;
+		dev_info(mpp->dev, "no regulator, continuing with freq-only devfreq\n");
+		dec->vdd = NULL;
+		//return 0;
 	}
 
-	ret = rockchip_init_opp_table(mpp->dev, NULL, "leakage", "vdec");
+	ret = dev_pm_opp_of_add_table(mpp->dev);
 	if (ret) {
-		dev_err(mpp->dev, "failed to init_opp_table\n");
-		return ret;
+		dev_err(mpp->dev, "failed to add generic OPP table: %d\n", ret);
+	} else {
+		dev_info(mpp->dev, "generic OPP table loaded\n");
 	}
+		//return ret;
+	//}
 
 	ret = devfreq_add_governor(&devfreq_vdec2_ondemand);
 	if (ret) {
