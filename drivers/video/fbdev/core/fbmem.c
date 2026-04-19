@@ -638,7 +638,7 @@ int fb_prepare_logo(struct fb_info *info, int rotate)
 	}
 
 	/* Return if no suitable logo was found */
-	fb_logo.logo = fb_find_logo(depth);
+	fb_logo.logo = fb_find_logo_for_fb(info, depth);
 
 	if (!fb_logo.logo) {
 		return 0;

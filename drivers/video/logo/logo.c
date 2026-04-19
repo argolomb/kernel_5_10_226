@@ -18,6 +18,13 @@
 #include <asm/setup.h>
 #endif
 
+#include <linux/fb.h>
+
+#if defined(CONFIG_DRM) && defined(CONFIG_DRM_FBDEV_EMULATION)
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_connector.h>
+#endif
+
 static bool nologo;
 module_param(nologo, bool, 0);
 MODULE_PARM_DESC(nologo, "Disables startup logo");
@@ -103,4 +110,59 @@ const struct linux_logo * __ref fb_find_logo(int depth)
 	}
 	return logo;
 }
+
+static const struct linux_logo * __ref fb_find_logo_default(int depth)
+{
+	const struct linux_logo *logo = NULL;
+
+	if (depth >= 1) {
+#ifdef CONFIG_LOGO_LINUX_MONO
+		logo = &logo_linux_mono;
+#endif
+	}
+	if (depth >= 4) {
+#ifdef CONFIG_LOGO_LINUX_VGA16
+		logo = &logo_linux_vga16;
+#endif
+	}
+	if (depth >= 8) {
+#ifdef CONFIG_LOGO_LINUX_CLUT224
+		logo = &logo_linux_clut224;
+#endif
+	}
+	return logo;
+}
+
+static bool __ref fb_logo_use_hdmi(struct fb_info *info)
+{
+	if (!info)
+		return false;
+
+	/*
+	 * RG353M internal display is 640x480.
+	 * If fbdev console is anything else, assume HDMI boot output.
+	 */
+	if (info->var.xres == 640 && info->var.yres == 480)
+		return false;
+
+	return true;
+}
+
+const struct linux_logo * __ref fb_find_logo_for_fb(struct fb_info *info, int depth)
+{
+	const struct linux_logo *logo;
+
+	if (nologo || logos_freed)
+		return NULL;
+
+	logo = fb_find_logo_default(depth);
+
+#ifdef CONFIG_LOGO_LINUX_CLUT224
+	if (depth >= 8 && fb_logo_use_hdmi(info))
+		logo = &logo_hdmi_clut224;
+#endif
+
+	return logo;
+}
+EXPORT_SYMBOL_GPL(fb_find_logo_for_fb);
 EXPORT_SYMBOL_GPL(fb_find_logo);

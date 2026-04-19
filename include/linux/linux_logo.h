@@ -33,6 +33,11 @@ struct linux_logo {
 	const unsigned char *data;
 };
 
+struct fb_info;
+
+extern const struct linux_logo logo_hdmi_clut224;
+extern const struct linux_logo *fb_find_logo_for_fb(struct fb_info *info, int depth);
+
 extern const struct linux_logo logo_linux_mono;
 extern const struct linux_logo logo_linux_vga16;
 extern const struct linux_logo logo_linux_clut224;
