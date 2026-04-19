@@ -126,8 +126,19 @@ static const struct id_table ic_id_table[] = {
 	{ IC_INFO(RTL_ROM_LMP_8821A, 0xc),
 	  .config_needed = false,
 	  .has_rom_version = true,
-	  .fw_name  = "rtl_bt/rtl8821c_fw.bin",
-	  .cfg_name = "rtl_bt/rtl8821c_config" },
+	  .fw_name  = "rtl_bt/rtl8821cs_fw.bin",
+	  .cfg_name = "rtl_bt/rtl8821cs_config" },
+
+	/* 8821CS after firmware has already been downloaded */
+	{ IC_INFO(0xf098, 0x75b8),
+		.config_needed = false,
+		.has_rom_version = false,
+		/*
+		 * Still load cfg so UART baud / flow-control can be parsed.
+		 * btrtl_download_firmware() will skip re-download for this ID.
+		 */
+		.fw_name  = "rtl_bt/rtl8821cs_fw.bin",
+		.cfg_name = "rtl_bt/rtl8821cs_config" },
 
 	/* 8761A */
 	{ IC_INFO(RTL_ROM_LMP_8761A, 0xa),
@@ -833,5 +844,7 @@ MODULE_FIRMWARE("rtl_bt/rtl8761a_fw.bin");
 MODULE_FIRMWARE("rtl_bt/rtl8761a_config.bin");
 MODULE_FIRMWARE("rtl_bt/rtl8821a_fw.bin");
 MODULE_FIRMWARE("rtl_bt/rtl8821a_config.bin");
+MODULE_FIRMWARE("rtl_bt/rtl8821cs_fw.bin");
+MODULE_FIRMWARE("rtl_bt/rtl8821cs_config.bin");
 MODULE_FIRMWARE("rtl_bt/rtl8822b_fw.bin");
 MODULE_FIRMWARE("rtl_bt/rtl8822b_config.bin");

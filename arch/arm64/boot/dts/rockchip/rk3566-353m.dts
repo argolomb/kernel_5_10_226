@@ -324,18 +324,7 @@
 	};
 
 	wireless-bluetooth {
-		compatible = "bluetooth-platdata";
-		clocks = <&rk817 1>;
-		clock-names = "ext_clock";
-		//wifi-bt-power-toggle;
-		uart_rts_gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_LOW>;
-		pinctrl-names = "default", "rts_gpio";
-		pinctrl-0 = <&uart1m1_rtsn>;
-		pinctrl-1 = <&uart1_gpios>;
-		BT,reset_gpio    = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
-		BT,wake_gpio     = <&gpio4 RK_PA4 GPIO_ACTIVE_HIGH>;
-		BT,wake_host_irq = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
-		status = "okay";
+		status = "disabled";
 	};
 	
 	joypad: singleadc-joypad {
@@ -1477,7 +1466,16 @@
 &uart1 {
 	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&uart1m1_xfer &uart1m1_ctsn>;
+	pinctrl-0 = <&uart1m1_xfer &uart1m1_ctsn &uart1m1_rtsn>;
+	uart-has-rtscts;
+
+	bluetooth {
+		compatible = "realtek,rtl8821cs-bt", "realtek,rtl8822cs-bt";
+		enable-gpios = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
+		device-wake-gpios = <&gpio4 RK_PA4 GPIO_ACTIVE_HIGH>;
+		host-wake-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
+		max-speed = <1500000>;
+	};
 };
 
 &can0 {
