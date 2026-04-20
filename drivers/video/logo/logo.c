@@ -142,7 +142,7 @@ static bool __ref fb_logo_use_hdmi(struct fb_info *info)
 	 * RG353M internal display is 640x480.
 	 * If fbdev console is anything else, assume HDMI boot output.
 	 */
-	if (info->var.xres == 640 && info->var.yres == 480)
+	if (info->var.xres == 640 || info->var.xres == 720 || info->var.xres == 960)
 		return false;
 
 	return true;
