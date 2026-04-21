@@ -139,10 +139,13 @@ static bool __ref fb_logo_use_hdmi(struct fb_info *info)
 		return false;
 
 	/*
-	 * RG353M internal display is 640x480.
+	 * RG353M and RG353V internal display is 640x480.
+	 * RGB30 internal display is 720x720.
+	 * RG503 internal display is 960x544.
+	 * RGB20Pro internal display is 1024x600.
 	 * If fbdev console is anything else, assume HDMI boot output.
 	 */
-	if (info->var.xres == 640 || info->var.xres == 720 || info->var.xres == 960)
+	if (info->var.xres == 640 || info->var.xres == 720 || info->var.xres == 960 || info->var.xres == 1024)
 		return false;
 
 	return true;
