@@ -314,7 +314,7 @@
 	wireless-wlan {
 		compatible = "wlan-platdata";
 		rockchip,grf = <&grf>;
-		wifi_chip_type = "ap6330";
+		wifi_chip_type = "rtl8723ds";
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_host_wake_irq>;
 		WIFI,host_wake_irq = <&gpio4 RK_PA1 GPIO_ACTIVE_HIGH>;
@@ -1274,10 +1274,8 @@
 	uart-has-rtscts;
 
 	bluetooth {
-		compatible = "realtek,rtl8821cs-bt", "realtek,rtl8822cs-bt";
+		compatible = "realtek,rtl8723ds-bt", "realtek,rtl8723bs-bt";
 		enable-gpios = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
-		device-wake-gpios = <&gpio4 RK_PA4 GPIO_ACTIVE_HIGH>;
-		host-wake-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
 		max-speed = <1500000>;
 	};
 };
