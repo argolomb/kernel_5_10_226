@@ -201,45 +201,190 @@
 		status = "okay";
 	};
 
-	loong1_joypad: loong1-joypad {
-		compatible = "loong1_joypad";
-		joypad-name = "Loong Gamepad";
-		joypad-product = <0x2000>;
-		joypad-revision = <0x0102>;
+	/*
+	 * Digital controls use gpio-keys because Miniloong buttons are plain GPIOs.
+	 * This preserves the working Miniloong button input path while mimicking
+	 * the dArkOS retrogame_joypad identity as far as gpio-keys allows via DTS.
+	 *
+	 * If your gpio-keys driver does not copy linux,input-vendor/product/version
+	 * into input_dev->id, SDL GUID will still differ and a tiny gpio_keys.c
+	 * patch is required.
+	 */
+	joypad: singleadc-joypad {
+		/*
+		 * Requires patched singleadcjoy.c with Miniloong direct-adc mode.
+		 *
+		 * This uses the real dArkOS singleadc-joypad input path so the
+		 * Miniloong reports like RGB20Pro:
+		 *   Name    = retrogame_joypad
+		 *   Bus     = 0019
+		 *   Vendor  = 484b
+		 *   Product = 1101
+		 *   Version = 0100
+		 *   Phys    = retrogame_joypad/input0
+		 *
+		 * It also exposes ABS/FF capabilities instead of a keyboard-like
+		 * gpio-keys device.
+		 */
+		compatible = "miniloong,singleadc-joypad", "singleadc-joypad";
+		status = "okay";
+
+		joypad-name = "retrogame_joypad";
+		joypad-product = <0x1101>;
+		joypad-revision = <0x0100>;
+
+		/*
+		 * Miniloong direct SARADC layout:
+		 *   SARADC3 = X
+		 *   SARADC2 = Y
+		 */
+		direct-adc;
 		io-channel-names = "joy_x", "joy_y";
 		io-channels = <&saradc 3>, <&saradc 2>;
-		button-adc-count = <2>;
+
+		/*
+		 * Keep amux-count at 4 so the input capability bitmap includes
+		 * ABS_X, ABS_Y, ABS_RX, and ABS_RY like the RGB20Pro. The
+		 * patched driver centers RX/RY because Miniloong has one stick.
+		 */
+		amux-count = <4>;
 		button-adc-scale = <72>;
 		button-adc-deadzone = <1800>;
-		invert-absx = <1>;
-		invert-absy = <1>;
-		button-adc-x-range = <65536>;
-		button-adc-y-range = <65536>;
 		button-adc-fuzz = <1152>;
 		button-adc-flat = <1152>;
 		poll-interval = <10>;
+
+		abs_x-p-tuning = <100>;
+		abs_x-n-tuning = <100>;
+		abs_y-p-tuning = <100>;
+		abs_y-n-tuning = <100>;
+		abs_rx-p-tuning = <100>;
+		abs_rx-n-tuning = <100>;
+		abs_ry-p-tuning = <100>;
+		abs_ry-n-tuning = <100>;
+
 		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_keys_ctrl>;
 
-		Joystick-L-Middle-key { gpios = <&gpio2 RK_PC5 GPIO_ACTIVE_LOW>; linux,code = <0x13d>; label = "LEFT JOYSTICK MIDDLE"; linux,input-type = <1>; };
-		LEFT-key { gpios = <&gpio3 RK_PC7 GPIO_ACTIVE_LOW>; linux,code = <KEY_LEFT>; label = "BTN_LEFT"; linux,input-type = <2>; };
-		RIGHT-key { gpios = <&gpio3 RK_PD0 GPIO_ACTIVE_LOW>; linux,code = <KEY_RIGHT>; label = "BTN_RIGHT"; linux,input-type = <2>; };
-		UP-key { gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_LOW>; linux,code = <KEY_UP>; label = "BTN_UP"; linux,input-type = <3>; };
-		DOWN-key { gpios = <&gpio3 RK_PC6 GPIO_ACTIVE_LOW>; linux,code = <KEY_DOWN>; label = "BTN_DOWN"; linux,input-type = <3>; };
-		BTNA-key { gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_LOW>; linux,code = <BTN_SOUTH>; label = "BTNSOUTH"; linux,input-type = <1>; };
-		BTNY-key { gpios = <&gpio3 RK_PD4 GPIO_ACTIVE_LOW>; linux,code = <BTN_NORTH>; label = "BTNNORTH"; linux,input-type = <1>; };
-		BTNX-key { gpios = <&gpio3 RK_PD2 GPIO_ACTIVE_LOW>; linux,code = <BTN_WEST>; label = "BTNWEST"; linux,input-type = <1>; };
-		BTNB-key { gpios = <&gpio3 RK_PD3 GPIO_ACTIVE_LOW>; linux,code = <BTN_EAST>; label = "BTNEAST"; linux,input-type = <1>; };
-		BTNL1-key { gpios = <&gpio3 RK_PD6 GPIO_ACTIVE_LOW>; linux,code = <BTN_TL>; label = "BTN_L1"; linux,input-type = <1>; };
-		BTNR1-key { gpios = <&gpio4 RK_PA0 GPIO_ACTIVE_LOW>; linux,code = <BTN_TR>; label = "BTN_R1"; linux,input-type = <1>; };
-		BTNL2-key { gpios = <&gpio3 RK_PD7 GPIO_ACTIVE_LOW>; linux,code = <BTN_TL2>; label = "BTN_L2"; linux,input-type = <1>; };
-		BTNR2-key { gpios = <&gpio4 RK_PA1 GPIO_ACTIVE_LOW>; linux,code = <BTN_TR2>; label = "BTN_R2"; linux,input-type = <1>; };
-		START-key { gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>; linux,code = <BTN_START>; label = "SELECT"; linux,input-type = <1>; };
-		SELECT-key { gpios = <&gpio4 RK_PA3 GPIO_ACTIVE_LOW>; linux,code = <BTN_SELECT>; label = "START"; linux,input-type = <1>; };
-		VOLUMEUP-key { gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>; linux,code = <KEY_VOLUMEUP>; label = "VOLUMEUP"; linux,input-type = <1>; };
-		VOLUMEDOWN-key { gpios = <&gpio4 RK_PA4 GPIO_ACTIVE_LOW>; linux,code = <KEY_VOLUMEDOWN>; label = "VOLUMEDOWN"; linux,input-type = <1>; };
-		M-key { gpios = <&gpio4 RK_PA6 GPIO_ACTIVE_LOW>; linux,code = <0x13c>; label = "MODE"; linux,input-type = <1>; };
+		sw1 {
+			gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_LOW>;
+			label = "BTN_UP";
+			linux,code = <BTN_DPAD_UP>;
+		};
+
+		sw2 {
+			gpios = <&gpio3 RK_PC6 GPIO_ACTIVE_LOW>;
+			label = "BTN_DOWN";
+			linux,code = <BTN_DPAD_DOWN>;
+		};
+
+		sw3 {
+			gpios = <&gpio3 RK_PC7 GPIO_ACTIVE_LOW>;
+			label = "BTN_LEFT";
+			linux,code = <BTN_DPAD_LEFT>;
+		};
+
+		sw4 {
+			gpios = <&gpio3 RK_PD0 GPIO_ACTIVE_LOW>;
+			label = "BTN_RIGHT";
+			linux,code = <BTN_DPAD_RIGHT>;
+		};
+
+		sw5 {
+			gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_LOW>;
+			label = "BTNSOUTH";
+			linux,code = <BTN_SOUTH>;
+		};
+
+		sw6 {
+			gpios = <&gpio3 RK_PD3 GPIO_ACTIVE_LOW>;
+			label = "BTNEAST";
+			linux,code = <BTN_EAST>;
+		};
+
+		sw7 {
+			gpios = <&gpio3 RK_PD2 GPIO_ACTIVE_LOW>;
+			label = "BTNWEST";
+			linux,code = <BTN_WEST>;
+		};
+
+		sw8 {
+			gpios = <&gpio3 RK_PD4 GPIO_ACTIVE_LOW>;
+			label = "BTNNORTH";
+			linux,code = <BTN_NORTH>;
+		};
+
+		sw9 {
+			gpios = <&gpio4 RK_PA2 GPIO_ACTIVE_LOW>;
+			label = "SELECT";
+			linux,code = <BTN_SELECT>;
+		};
+
+		sw10 {
+			gpios = <&gpio4 RK_PA3 GPIO_ACTIVE_LOW>;
+			label = "START";
+			linux,code = <BTN_START>;
+		};
+
+		sw11 {
+			gpios = <&gpio4 RK_PA6 GPIO_ACTIVE_LOW>;
+			label = "MODE";
+			linux,code = <BTN_MODE>;
+		};
+
+		sw12 {
+			gpios = <&gpio3 RK_PD6 GPIO_ACTIVE_LOW>;
+			label = "BTN_L1";
+			linux,code = <BTN_TL>;
+		};
+
+		sw13 {
+			gpios = <&gpio4 RK_PA0 GPIO_ACTIVE_LOW>;
+			label = "BTN_R1";
+			linux,code = <BTN_TR>;
+		};
+
+		sw14 {
+			gpios = <&gpio3 RK_PD7 GPIO_ACTIVE_LOW>;
+			label = "BTN_L2";
+			linux,code = <BTN_TL2>;
+		};
+
+		sw15 {
+			gpios = <&gpio4 RK_PA1 GPIO_ACTIVE_LOW>;
+			label = "BTN_R2";
+			linux,code = <BTN_TR2>;
+		};
+
+		sw16 {
+			gpios = <&gpio2 RK_PC5 GPIO_ACTIVE_LOW>;
+			label = "LEFT JOYSTICK MIDDLE";
+			linux,code = <BTN_THUMBL>;
+		};
 	};
+
+	gpio_keys_vol: gpio-keys-vol {
+		compatible = "gpio-keys";
+		autorepeat;
+
+		button-volup {
+			gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>;
+			label = "VOLUMEUP";
+			linux,code = <KEY_VOLUMEUP>;
+		};
+
+		button-voldown {
+			gpios = <&gpio4 RK_PA4 GPIO_ACTIVE_LOW>;
+			label = "VOLUMEDOWN";
+			linux,code = <KEY_VOLUMEDOWN>;
+		};
+	};
+
+	/*
+	 * Placeholder for Miniloong analog stick hardware.
+	 * This is disabled because the existing dArkOS singleadc-joypad
+	 * binding expects an ADC mux, while Miniloong uses direct ADC channels.
+	 */
 
 	mangmi_powerCtrl: mangmi-powerctrl {
 		compatible = "mangmi,powerCtrl";

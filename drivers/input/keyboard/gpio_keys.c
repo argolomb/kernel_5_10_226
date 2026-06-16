@@ -812,6 +812,34 @@ static int gpio_keys_probe(struct platform_device *pdev)
 	input->id.product = 0x0001;
 	input->id.version = 0x0100;
 
+	/*
+	 * dArkOS handheld compatibility:
+	 *
+	 * SDL builds its controller GUID from the evdev device identity.
+	 * The stock gpio-keys driver hardcodes BUS_HOST/0001/0001/0100,
+	 * which makes Miniloong's gpio-keys controls produce a different
+	 * GUID than the existing dArkOS retrogame_joypad devices.
+	 *
+	 * Allow board DTS files to override the evdev identity:
+	 *
+	 *   linux,input-bustype = <0x03>;    // BUS_USB
+	 *   linux,input-vendor  = <0x484b>;
+	 *   linux,input-product = <0x1101>;
+	 *   linux,input-version = <0x0100>;
+	 */
+	if (dev->of_node) {
+		u32 val;
+
+		if (!of_property_read_u32(dev->of_node, "linux,input-bustype", &val))
+			input->id.bustype = val;
+		if (!of_property_read_u32(dev->of_node, "linux,input-vendor", &val))
+			input->id.vendor = val;
+		if (!of_property_read_u32(dev->of_node, "linux,input-product", &val))
+			input->id.product = val;
+		if (!of_property_read_u32(dev->of_node, "linux,input-version", &val))
+			input->id.version = val;
+	}
+
 	input->keycode = ddata->keymap;
 	input->keycodesize = sizeof(ddata->keymap[0]);
 	input->keycodemax = pdata->nbuttons;

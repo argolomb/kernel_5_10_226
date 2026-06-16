@@ -57,6 +57,10 @@ struct bt_adc {
 struct analog_mux {
 	/* IIO ADC Channel : amux connect channel */
 	struct iio_channel *iio_ch;
+	/* direct Miniloong ADC channels, no external mux */
+	struct iio_channel *direct_x_ch;
+	struct iio_channel *direct_y_ch;
+	bool direct_mode;
 	/* analog mux select(a,b) gpio */
 	int sel_a_gpio, sel_b_gpio;
 	/* analog mux enable gpio */
@@ -200,13 +204,54 @@ static int joypad_amux_select(struct analog_mux *amux, int channel)
 /*----------------------------------------------------------------------------*/
 static int joypad_adc_read(struct analog_mux *amux, struct bt_adc *adc)
 {
-	int value;
+	int value = 0;
+	int ret;
 
+	if (amux->direct_mode) {
+		/*
+		 * Miniloong Pocket 1 uses direct SARADC channels instead of
+		 * the RGB20 Pro/RG353-style external analog mux.
+		 *
+		 * The existing driver reports:
+		 *   amux_ch 0 = ABS_RY
+		 *   amux_ch 1 = ABS_RX
+		 *   amux_ch 2 = ABS_Y
+		 *   amux_ch 3 = ABS_X
+		 *
+		 * Miniloong only has one physical analog stick:
+		 *   joy_y -> ABS_Y
+		 *   joy_x -> ABS_X
+		 *
+		 * Keep RX/RY centered by returning the calibrated midpoint
+		 * during open/calibration and zero delta during polling.
+		 */
+		switch (adc->report_type) {
+		case ABS_X:
+			ret = iio_read_channel_raw(amux->direct_x_ch, &value);
+			break;
+		case ABS_Y:
+			ret = iio_read_channel_raw(amux->direct_y_ch, &value);
+			break;
+		case ABS_RX:
+		case ABS_RY:
+			value = ADC_MAX_VOLTAGE / 2;
+			ret = 0;
+			break;
+		default:
+			ret = -EINVAL;
+			break;
+		}
 
-	if (joypad_amux_select(amux, adc->amux_ch))
-		return 0;
+		if (ret)
+			return 0;
+	} else {
+		if (joypad_amux_select(amux, adc->amux_ch))
+			return 0;
 
-	iio_read_channel_raw(amux->iio_ch, &value);
+		ret = iio_read_channel_raw(amux->iio_ch, &value);
+		if (ret)
+			return 0;
+	}
 
 	value *= adc->scale;
 #ifdef __LEFT_JOYSTICK_INVERT__
@@ -704,6 +749,44 @@ static int joypad_amux_setup(struct device *dev, struct joypad *joypad)
 		return -ENOMEM;
 	}
 	amux = joypad->amux;
+
+	if (device_property_present(dev, "direct-adc")) {
+		enum iio_chan_type type;
+
+		amux->direct_mode = true;
+
+		amux->direct_x_ch = devm_iio_channel_get(dev, "joy_x");
+		if (IS_ERR(amux->direct_x_ch)) {
+			dev_err(dev, "direct joy_x iio channel get error\n");
+			return PTR_ERR(amux->direct_x_ch);
+		}
+
+		amux->direct_y_ch = devm_iio_channel_get(dev, "joy_y");
+		if (IS_ERR(amux->direct_y_ch)) {
+			dev_err(dev, "direct joy_y iio channel get error\n");
+			return PTR_ERR(amux->direct_y_ch);
+		}
+
+		if (iio_get_channel_type(amux->direct_x_ch, &type))
+			return -EINVAL;
+
+		if (type != IIO_VOLTAGE) {
+			dev_err(dev, "Incompatible joy_x channel type %d\n", type);
+			return -EINVAL;
+		}
+
+		if (iio_get_channel_type(amux->direct_y_ch, &type))
+			return -EINVAL;
+
+		if (type != IIO_VOLTAGE) {
+			dev_err(dev, "Incompatible joy_y channel type %d\n", type);
+			return -EINVAL;
+		}
+
+		dev_info(dev, "using Miniloong direct ADC mode\n");
+		return 0;
+	}
+
 	amux->iio_ch = devm_iio_channel_get(dev, "amux_adc");
 	if (IS_ERR(amux->iio_ch)) {
 		dev_err(dev, "iio channel get error\n");
@@ -956,6 +1039,9 @@ static int joypad_play_effect(struct input_dev *dev, void *data, struct ff_effec
 	if (effect->type != FF_RUMBLE)
 		return 0;
 
+	if (!joypad->pwm || IS_ERR(joypad->pwm))
+		return 0;
+
 	strong = effect->u.rumble.strong_magnitude;
 	weak = effect->u.rumble.weak_magnitude;
 
@@ -1053,6 +1139,23 @@ static int joypad_input_setup(struct device *dev, struct joypad *joypad)
 		input_set_capability(input, gpio->report_type,
 				gpio->linux_code);
 	}
+
+	/*
+	 * dArkOS/RGB20Pro SDL mapping compatibility:
+	 *
+	 * RGB20Pro advertises BTN_THUMBR even when Miniloong may not have
+	 * a physical right-stick click. SDL enumerates joystick buttons from
+	 * the advertised evdev key capabilities. Without BTN_THUMBR, Miniloong
+	 * maps:
+	 *   dpup:b12, dpdown:b13, dpleft:b14, dpright:b15
+	 *
+	 * RGB20Pro maps:
+	 *   rightstick:b12, dpup:b13, dpdown:b14, dpleft:b15, dpright:b16
+	 *
+	 * Advertise BTN_THUMBR so the button indexes match RGB20Pro.
+	 * No event is generated unless a DTS GPIO also reports BTN_THUMBR.
+	 */
+	input_set_capability(input, EV_KEY, BTN_THUMBR);
 
 	if (joypad->auto_repeat)
 		__set_bit(EV_REP, input->evbit);
@@ -1191,6 +1294,7 @@ static int joypad_probe(struct platform_device *pdev)
 /*----------------------------------------------------------------------------*/
 static const struct of_device_id joypad_of_match[] = {
 	{ .compatible = "singleadc-joypad", },
+	{ .compatible = "miniloong,singleadc-joypad", },
 	{},
 };
 
