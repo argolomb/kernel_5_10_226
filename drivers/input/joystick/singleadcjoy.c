@@ -242,14 +242,14 @@ static int joypad_adc_read(struct analog_mux *amux, struct bt_adc *adc)
 			break;
 		}
 
-		if (ret)
+		if (ret < 0)
 			return 0;
 	} else {
 		if (joypad_amux_select(amux, adc->amux_ch))
 			return 0;
 
 		ret = iio_read_channel_raw(amux->iio_ch, &value);
-		if (ret)
+		if (ret < 0)
 			return 0;
 	}
 
