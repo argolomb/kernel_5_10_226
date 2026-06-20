@@ -248,10 +248,10 @@
 		 * patched driver centers RX/RY because Miniloong has one stick.
 		 */
 		amux-count = <4>;
-		button-adc-scale = <72>;
-		button-adc-deadzone = <1800>;
-		button-adc-fuzz = <1152>;
-		button-adc-flat = <1152>;
+		button-adc-scale = <1>;
+		button-adc-deadzone = <8>;
+		button-adc-fuzz = <0>;
+		button-adc-flat = <0>;
 		poll-interval = <10>;
 
 		abs_x-p-tuning = <100>;
@@ -458,7 +458,8 @@
 	status = "okay";
 	rockchip,lane-rate = <1000>;
 	dsi0_panel: panel@0 {
-		compatible = "simple-panel-dsi";
+		compatible = "miniloong,pocket1-panel";
+		miniloong,madctl = <0xe0>;
 		reg = <0>;
 		backlight = <&backlight>;
 		enable-gpios = <&gpio0 RK_PB5 GPIO_ACTIVE_HIGH>;
@@ -1361,6 +1362,7 @@
 	status = "okay";
 	assigned-clocks = <&cru DCLK_VOP0>, <&cru DCLK_VOP1>;
 	assigned-clock-parents = <&pmucru PLL_HPLL>, <&cru PLL_VPLL>;
+	disable-win-move;
 };
 
 &vop_mmu {
