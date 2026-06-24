@@ -7,6 +7,7 @@
 
 /dts-v1/;
 
+#include <dt-bindings/pwm/pwm.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/pinctrl/rockchip.h>
 #include <dt-bindings/input/rk-input.h>
@@ -17,7 +18,7 @@
 
 / {
 	model = "MINILOONG Pocket1";
-	compatible = "miniloong,pocket1", "rockchip,rk3566-rk817-tablet", "rockchip,rk3566";
+	compatible = "miniloong,pocket1", "rockchip,rk3566";
 
 	chosen: chosen {
 		stdout-path = "serial2:1500000n8";
@@ -93,6 +94,26 @@
 		rockchip,camera-module-facing = "back";
 	};
 
+	rk817_sound: rk817-sound {
+		/*
+		 * Match the known-working dArkOS/RGB20Pro RK817 card binding.
+		 * Keep this simple until the codec card appears in aplay -l.
+		 */
+		status = "okay";
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,name = "rockchip,rk817-codec";
+		simple-audio-card,mclk-fs = <256>;
+
+		simple-audio-card,cpu {
+			sound-dai = <&i2s1_8ch>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&rk817_codec>;
+		};
+	};
+
 	hdmi_sound: hdmi-sound {
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
@@ -126,23 +147,6 @@
 		enable-active-high;
 		regulator-always-on;
 		regulator-boot-on;
-	};
-
-	rk817-sound {
-		status = "okay";
-		compatible = "simple-audio-card";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,name = "rockchip,rk817-codec";
-		simple-audio-card,mclk-fs = <256>;
-		simple-audio-card,hp-det-gpio = <&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
-
-		simple-audio-card,cpu {
-			sound-dai = <&i2s1_8ch>;
-		};
-
-		simple-audio-card,codec {
-			sound-dai = <&rk817_codec>;
-		};
 	};
 
 	sdio_pwrseq: sdio-pwrseq {
@@ -210,6 +214,30 @@
 	 * into input_dev->id, SDL GUID will still differ and a tiny gpio_keys.c
 	 * patch is required.
 	 */
+	gpio_keys_vol: gpio-keys-vol {
+		/*
+		 * Keep volume keys separate from retrogame_joypad so the
+		 * joypad SDL mapping/bitmap stays RGB20Pro-compatible.
+		 */
+		compatible = "gpio-keys";
+		autorepeat;
+		status = "okay";
+
+		button-volup {
+			gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>;
+			label = "VOLUMEUP";
+			linux,code = <KEY_VOLUMEUP>;
+			debounce-interval = <10>;
+		};
+
+		button-voldown {
+			gpios = <&gpio4 RK_PA4 GPIO_ACTIVE_LOW>;
+			label = "VOLUMEDOWN";
+			linux,code = <KEY_VOLUMEDOWN>;
+			debounce-interval = <10>;
+		};
+	};
+	
 	joypad: singleadc-joypad {
 		/*
 		 * Requires patched singleadcjoy.c with Miniloong direct-adc mode.
@@ -228,6 +256,10 @@
 		 */
 		compatible = "miniloong,singleadc-joypad", "singleadc-joypad";
 		status = "okay";
+
+		/* rumble */
+		/* pwms = <&pwm5 0 10000 0>; */
+		pwms = <&pwm2 0 10000 0>;
 
 		joypad-name = "retrogame_joypad";
 		joypad-product = <0x1101>;
@@ -248,20 +280,21 @@
 		 * patched driver centers RX/RY because Miniloong has one stick.
 		 */
 		amux-count = <4>;
-		button-adc-scale = <1>;
-		button-adc-deadzone = <8>;
-		button-adc-fuzz = <0>;
-		button-adc-flat = <0>;
+		button-adc-scale = <2>;
+		button-adc-deadzone = <48>;
+		button-adc-fuzz = <16>;
+		button-adc-flat = <16>;
 		poll-interval = <10>;
+		direct-adc-gain = <6>;
 
-		abs_x-p-tuning = <100>;
-		abs_x-n-tuning = <100>;
-		abs_y-p-tuning = <100>;
-		abs_y-n-tuning = <100>;
-		abs_rx-p-tuning = <100>;
-		abs_rx-n-tuning = <100>;
-		abs_ry-p-tuning = <100>;
-		abs_ry-n-tuning = <100>;
+		abs_x-p-tuning = <250>;
+		abs_x-n-tuning = <250>;
+		abs_y-p-tuning = <250>;
+		abs_y-n-tuning = <250>;
+		abs_rx-p-tuning = <250>;
+		abs_rx-n-tuning = <250>;
+		abs_ry-p-tuning = <250>;
+		abs_ry-n-tuning = <250>;
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&gpio_keys_ctrl>;
@@ -363,23 +396,6 @@
 		};
 	};
 
-	gpio_keys_vol: gpio-keys-vol {
-		compatible = "gpio-keys";
-		autorepeat;
-
-		button-volup {
-			gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>;
-			label = "VOLUMEUP";
-			linux,code = <KEY_VOLUMEUP>;
-		};
-
-		button-voldown {
-			gpios = <&gpio4 RK_PA4 GPIO_ACTIVE_LOW>;
-			label = "VOLUMEDOWN";
-			linux,code = <KEY_VOLUMEDOWN>;
-		};
-	};
-
 	/*
 	 * Placeholder for Miniloong analog stick hardware.
 	 * This is disabled because the existing dArkOS singleadc-joypad
@@ -392,7 +408,7 @@
 		pinctrl-0 = <&powerCtrl_en>;
 		typec-5v-en-gpio = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
 		spk-ctl-gpio = <&gpio0 RK_PC0 GPIO_ACTIVE_HIGH>;
-		status = "okay";
+		status = "disabled";
 	};
 };
 
@@ -403,6 +419,18 @@
 };
 
 &cpu0 {
+	cpu-supply = <&vdd_cpu>;
+};
+
+&cpu1 {
+	cpu-supply = <&vdd_cpu>;
+};
+
+&cpu2 {
+	cpu-supply = <&vdd_cpu>;
+};
+
+&cpu3 {
 	cpu-supply = <&vdd_cpu>;
 };
 
@@ -450,6 +478,7 @@
 };
 
 &dmc {
+	operating-points-v2 = <&dmc_opp_table>;
 	center-supply = <&vdd_logic>;
 	status = "okay";
 };
@@ -459,7 +488,6 @@
 	rockchip,lane-rate = <1000>;
 	dsi0_panel: panel@0 {
 		compatible = "miniloong,pocket1-panel";
-		miniloong,madctl = <0xe0>;
 		reg = <0>;
 		backlight = <&backlight>;
 		enable-gpios = <&gpio0 RK_PB5 GPIO_ACTIVE_HIGH>;
@@ -587,7 +615,9 @@
 
 &gpu {
 	mali-supply = <&vdd_gpu>;
+	mem-supply = <&vdd_gpu>;
 	status = "okay";
+	operating-points-v2 = <&gpu_opp_table>;
 };
 
 &hdmi {
@@ -609,9 +639,9 @@
 &i2c0 {
 	status = "okay";
 
-	vdd_cpu: tcs4525@1c {
-		compatible = "tcs,tcs4525";
-		reg = <0x1c>;
+	vdd_cpu: regulator@40 {
+		compatible = "tcs,fan53555";
+		reg = <0x40>;
 		vin-supply = <&vccsys>;
 		regulator-compatible = "fan53555-reg";
 		regulator-name = "vdd_cpu";
@@ -907,7 +937,10 @@
 			hp-volume = <20>;
 			spk-volume = <3>;
 			out-l2spk-r2hp;
-			spk-ctl-gpios = <&gpio0 RK_PA6 GPIO_ACTIVE_HIGH>;
+			/* Miniloong external speaker amp enable */
+			spk-ctl-gpios = <&gpio0 RK_PC0 GPIO_ACTIVE_HIGH>;
+			/* Miniloong headphone detect */
+			hp-det-gpios = <&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
 			status = "okay";
 		};
 	};
@@ -1105,9 +1138,15 @@
 		};
 	};
 
+	audio-amplifier {
+		spk_amp_enable_h: spk-amp-enable-h {
+			rockchip,pins = <0 RK_PC0 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
 	headphone {
 		hp_det: hp-det {
-			rockchip,pins = <4 RK_PC4 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <4 RK_PC6 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -1206,6 +1245,10 @@
 	vccio5-supply = <&vcc_3v3>;
 	vccio6-supply = <&vcc_3v3>;
 	vccio7-supply = <&vcc_3v3>;
+};
+
+&pwm2 {
+	status = "okay";
 };
 
 &pwm3 {
@@ -1362,7 +1405,6 @@
 	status = "okay";
 	assigned-clocks = <&cru DCLK_VOP0>, <&cru DCLK_VOP1>;
 	assigned-clock-parents = <&pmucru PLL_HPLL>, <&cru PLL_VPLL>;
-	disable-win-move;
 };
 
 &vop_mmu {

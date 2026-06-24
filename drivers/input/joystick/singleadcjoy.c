@@ -114,6 +114,13 @@ struct joypad {
 	/* joystick deadzone control */
 	int bt_adc_deadzone;
 
+	/*
+	 * Optional gain for direct ADC devices such as Miniloong.
+	 * Defaults to 1 and is only applied when direct-adc mode is active,
+	 * so muxed devices such as RGB20Pro/RG353 are unaffected.
+	 */
+	int direct_adc_gain;
+
 	struct mutex lock;
 
 	/* amux debug channel */
@@ -651,6 +658,19 @@ static void joypad_adc_check(struct input_polled_dev *poll_dev)
 			else adc->value = 0;
 		}
 		
+		/*
+		 * Miniloong/direct ADC gain:
+		 *
+		 * Some direct-ADC sticks have much smaller physical raw travel
+		 * than the muxed Anbernic/RGB20Pro sticks. Expand only direct
+		 * ADC reports to use more of the advertised ABS range.
+		 *
+		 * This is opt-in via direct-adc-gain and does not affect
+		 * normal muxed devices.
+		 */
+		if (joypad->amux->direct_mode)
+			adc->value *= joypad->direct_adc_gain;
+
 		adc->value = abs(adc->value) < 16 ? 0 : adc->value;
 
 		/* adc data tuning */
@@ -1106,10 +1126,12 @@ static int joypad_input_setup(struct device *dev, struct joypad *joypad)
 				joypad->bt_adc_flat);
 		dev_info(dev,
 			"%s : SCALE = %d, ABS min = %d, max = %d,"
-			" fuzz = %d, flat = %d, deadzone = %d\n",
+			" fuzz = %d, flat = %d, deadzone = %d,"
+			" direct_adc_gain = %d\n",
 			__func__, adc->scale, adc->min, adc->max,
 			joypad->bt_adc_fuzz, joypad->bt_adc_flat,
-			joypad->bt_adc_deadzone);
+			joypad->bt_adc_deadzone,
+			joypad->direct_adc_gain);
 		dev_info(dev,
 			"%s : adc tuning_p = %d, adc_tuning_n = %d\n\n",
 			__func__, adc->tuning_p, adc->tuning_n);
@@ -1206,6 +1228,18 @@ static void joypad_setup_value_check(struct device *dev, struct joypad *joypad)
 	else
 		device_property_read_u32(dev, "button-adc-deadzone",
 					&joypad->bt_adc_deadzone);
+
+	/*
+	 * Direct ADC gain is optional and defaults to 1. It is only used
+	 * when direct-adc is present, so existing muxed devices remain
+	 * unchanged unless their DTS explicitly opts in.
+	 */
+	if (device_property_read_u32(dev, "direct-adc-gain",
+				     &joypad->direct_adc_gain))
+		joypad->direct_adc_gain = 1;
+
+	if (joypad->direct_adc_gain < 1)
+		joypad->direct_adc_gain = 1;
 
 }
 
