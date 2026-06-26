@@ -282,6 +282,7 @@ struct charger_platform_data {
 	int sample_res;
 	int otg5v_suspend_enable;
 	bool extcon;
+	bool validate_charger_with_pmic_plugin;
 	int gate_function_disable;
 };
 
@@ -349,6 +350,8 @@ static enum power_supply_property rk817_usb_props[] = {
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 };
 
+static int rk817_charge_get_plug_in_status(struct rk817_charger *charge);
+
 static int rk817_charge_ac_get_property(struct power_supply *psy,
 					enum power_supply_property psp,
 					union power_supply_propval *val)
@@ -360,6 +363,9 @@ static int rk817_charge_ac_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_ONLINE:
 		if (charge->pdata->virtual_power)
 			val->intval = 1;
+		else if (charge->pdata->validate_charger_with_pmic_plugin &&
+			 !rk817_charge_get_plug_in_status(charge))
+			val->intval = 0;
 		else
 			val->intval = (charge->ac_in | charge->dc_in);
 
@@ -368,6 +374,9 @@ static int rk817_charge_ac_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_STATUS:
 		if (charge->pdata->virtual_power)
 			val->intval = POWER_SUPPLY_STATUS_CHARGING;
+		else if (charge->pdata->validate_charger_with_pmic_plugin &&
+			 !rk817_charge_get_plug_in_status(charge))
+			val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
 		else
 			val->intval = charge->prop_status;
 
@@ -1042,13 +1051,23 @@ static void rk817_charger_evt_worker(struct work_struct *work)
 	static const char * const event[] = {"UN", "NONE", "USB",
 					     "AC", "CDP1.5A"};
 
-	/* Determine cable/charger type */
-	if (extcon_get_state(edev, EXTCON_CHG_USB_SDP) > 0)
+	/*
+	 * Some boards can expose a stale charger-type extcon state during early
+	 * boot.  For those boards, trust charger-type extcon state only when the
+	 * RK817 hardware plug-in bit says external power is physically present.
+	 * EXTCON_USB is not used here because dedicated chargers/DCPs may not
+	 * assert it even while they are valid charging sources.
+	 */
+	if (charge->pdata->validate_charger_with_pmic_plugin &&
+	    !rk817_charge_get_plug_in_status(charge)) {
+		charger = USB_TYPE_NONE_CHARGER;
+	} else if (extcon_get_state(edev, EXTCON_CHG_USB_SDP) > 0) {
 		charger = USB_TYPE_USB_CHARGER;
-	else if (extcon_get_state(edev, EXTCON_CHG_USB_DCP) > 0)
+	} else if (extcon_get_state(edev, EXTCON_CHG_USB_DCP) > 0) {
 		charger = USB_TYPE_AC_CHARGER;
-	else if (extcon_get_state(edev, EXTCON_CHG_USB_CDP) > 0)
+	} else if (extcon_get_state(edev, EXTCON_CHG_USB_CDP) > 0) {
 		charger = USB_TYPE_CDP_CHARGER;
+	}
 
 	if (charger != USB_TYPE_UNKNOWN_CHARGER) {
 		DBG("receive type-c notifier event: %s...\n",
@@ -1370,6 +1389,8 @@ static int rk817_charge_parse_dt(struct rk817_charger *charge)
 	pdata->chrg_term_mode = DEFAULT_CHRG_TERM_MODE;
 
 	pdata->extcon = of_property_read_bool(np, "extcon");
+	pdata->validate_charger_with_pmic_plugin =
+		of_property_read_bool(np, "rockchip,validate-charger-with-pmic-plugin");
 
 	ret = of_property_read_u32(np, "max_chrg_current",
 				   &pdata->max_chrg_current);
@@ -1458,11 +1479,13 @@ static int rk817_charge_parse_dt(struct rk817_charger *charge)
 	    "sample_res:%d\n"
 	    "extcon:%d\n"
 	    "virtual_power:%d\n"
-	    "power_dc2otg:%d\n",
+	    "power_dc2otg:%d\n"
+	    "validate_charger_with_pmic_plugin:%d\n",
 	    pdata->max_input_current, pdata->min_input_voltage,
 	    pdata->max_chrg_current,  pdata->max_chrg_voltage,
 	    pdata->sample_res, pdata->extcon,
-	    pdata->virtual_power, pdata->power_dc2otg);
+	    pdata->virtual_power, pdata->power_dc2otg,
+	    pdata->validate_charger_with_pmic_plugin);
 
 	return 0;
 }

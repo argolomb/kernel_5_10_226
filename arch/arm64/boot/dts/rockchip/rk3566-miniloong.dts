@@ -179,6 +179,14 @@
 			3300000 0x1>;
 	};
 
+	vcc_wifi_io: vcc-wifi-io {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_wifi_io";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
 	wireless-wlan {
 		compatible = "wlan-platdata";
 		rockchip,grf = <&grf>;
@@ -186,7 +194,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_host_wake_irq>;
 		WIFI,host_wake_irq = <&gpio2 RK_PB2 GPIO_ACTIVE_HIGH>;
-		WIFI,poweren_gpio = <&gpio0 RK_PC4 GPIO_ACTIVE_HIGH>;
+		//WIFI,poweren_gpio = <&gpio0 RK_PC4 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 
@@ -886,6 +894,8 @@
 
 			otg_switch: OTG_SWITCH {
 				regulator-name = "otg_switch";
+				regulator-min-microvolt = <5000000>;
+				regulator-max-microvolt = <5000000>;
 				regulator-state-mem {
 					regulator-off-in-suspend;
 				};
@@ -916,12 +926,13 @@
 			min_input_voltage = <4500>;
 			max_input_current = <1500>;
 			max_chrg_current = <2000>;
-			max_chrg_voltage = <4300>;
+			max_chrg_voltage = <4250>;
 			chrg_term_mode = <0>;
 			chrg_finish_cur = <300>;
 			virtual_power = <0>;
 			dc_det_adc = <0>;
 			extcon = <&usb2phy0>;
+			rockchip,validate-charger-with-pmic-plugin;
 		};
 
 		rk817_codec: codec {
@@ -1342,21 +1353,26 @@
 };
 
 &sdmmc1 {
-	max-frequency = <150000000>;
-	no-sd;
-	no-mmc;
-	bus-width = <4>;
-	disable-wp;
-	cap-sd-highspeed;
-	cap-sdio-irq;
-	keep-power-in-suspend;
-	mmc-pwrseq = <&sdio_pwrseq>;
-	non-removable;
-	pinctrl-names = "default";
-	pinctrl-0 = <&sdmmc1_bus4 &sdmmc1_cmd &sdmmc1_clk>;
-	sd-uhs-sdr104;
-	rockchip,default-sample-phase = <90>;
-	status = "okay";
+    max-frequency = <50000000>;
+
+    no-sd;
+    no-mmc;
+    no-1-8-v;
+    voltage-ranges = <3300 3300>;
+
+    bus-width = <4>;
+    cap-sdio-irq;
+    keep-power-in-suspend;
+    non-removable;
+
+    mmc-pwrseq = <&sdio_pwrseq>;
+    vmmc-supply = <&vcc_3v3>;
+    vqmmc-supply = <&vcc_wifi_io>;
+
+    pinctrl-names = "default";
+    pinctrl-0 = <&sdmmc1_bus4 &sdmmc1_cmd &sdmmc1_clk>;
+
+    status = "okay";
 };
 
 &tsadc {
@@ -1378,7 +1394,9 @@
 };
 
 &usbdrd_dwc3 {
-	status = "okay";
+    dr_mode = "otg";
+    extcon = <&usb2phy0>;
+    status = "okay";
 };
 
 &usbdrd30 {
