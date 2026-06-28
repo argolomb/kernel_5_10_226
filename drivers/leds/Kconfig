@@ -936,6 +936,14 @@ config LEDS_ACER_A500
 	  This option enables support for the Power Button LED of
 	  Acer Iconia Tab A500.
 
+config LEDS_AW20036
+	tristate "AWINIC AW20036 LED driver"
+	depends on LEDS_CLASS
+	depends on I2C
+	depends on OF
+	help
+	  This enables support for the AWINIC AW20036 LED controller.
+
 comment "LED Triggers"
 source "drivers/leds/trigger/Kconfig"
 

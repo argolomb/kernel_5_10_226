@@ -1113,7 +1113,37 @@
 	status = "okay";
 };
 
+&i2c1 {
+	status = "okay";
+
+	aw20036: aw20036_led@3a {
+		compatible = "awinic,aw20036_led";
+		reg = <0x3a>;
+		status = "okay";
+
+		reset-gpio = <&gpio4 RK_PC3 GPIO_ACTIVE_HIGH>;
+		irq-gpio = <&gpio4 RK_PC2 GPIO_ACTIVE_HIGH>;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&aw20036_pins>;
+
+		aw20036,led {
+			aw20036,name = "aw20036_led";
+			aw20036,imax = <1>;
+			aw20036,brightness = <128>;
+			aw20036,max_brightness = <255>;
+		};
+	};
+};
+
 &pinctrl {
+	aw20036 {
+		aw20036_pins: aw20036-pins {
+			rockchip,pins =
+				<4 RK_PC2 RK_FUNC_GPIO &pcfg_pull_none>,
+				<4 RK_PC3 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
 	cam {
 		cam_clkout0: cam-clkout0 {
 			rockchip,pins =
