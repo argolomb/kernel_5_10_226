@@ -30,6 +30,7 @@
 #include <linux/poll.h>
 #include <asm/uaccess.h>
 #include <linux/leds.h>
+#include <linux/workqueue.h>
 #include "leds-aw20036.h"
 #include "leds-aw20036-reg.h"
 /******************************************************
@@ -1487,20 +1488,20 @@ static ssize_t aw20036_always_on_store(struct device *dev,
 }
 
 
+
 /*
  * Miniloong / AW20036 debug-page channel control.
  *
  * On this device, the normal page-1/page-2 matrix paths used by
  * single_brightness, frame_brightness and factory_test may not light the
  * joystick LEDs.  The generic brightness callback does work because it uses
- * the AW20036 debug page 0xC4.  This sysfs entry exposes that same working
- * path, but for one debug channel at a time, so the physical LED channels can
- * be mapped safely from userspace.
+ * the AW20036 debug page 0xC4.  These sysfs entries expose that same working
+ * path for Miniloong-specific RGB control.
  *
- * Usage:
- *   echo "<channel> <brightness>" > dbg_channel
- *   echo "all <brightness>"       > dbg_channel
- *   echo "off"                    > dbg_channel
+ * Discovered Miniloong debug-page RGB map:
+ *   Blue:  0 3 6 9 12 15 18 21
+ *   Green: 1 4 7 10 13 16 19 22
+ *   Red:   2 5 8 11 14 17 20 23
  */
 static int aw20036_dbg_clear_channels(struct aw20036 *aw20036)
 {
@@ -1566,7 +1567,8 @@ static int aw20036_dbg_set_channel(struct aw20036 *aw20036,
 	if (ret < 0)
 		return ret;
 
-	ret = aw20036_i2c_write(aw20036, dim_reg, AW20036_DBGCTR_DIM);
+	ret = aw20036_i2c_write(aw20036, dim_reg,
+				  brightness ? AW20036_DBGCTR_DIM : 0x00);
 	if (ret < 0)
 		return ret;
 
@@ -1602,16 +1604,10 @@ static int aw20036_dbg_set_all_channels(struct aw20036 *aw20036,
 	return 0;
 }
 
-
-/*
- * Miniloong fixed RGB map found from dbg_channel testing:
- *   Blue:  0 3 6 9 12 15 18 21
- *   Green: 1 4 7 10 13 16 19 22
- *   Red:   2 5 8 11 14 17 20 23
- *
- * These are debug-page channel numbers, not normal AW20036 matrix channels.
- */
 static unsigned int aw20036_miniloong_brightness = 120;
+static bool aw20036_miniloong_cur_red;
+static bool aw20036_miniloong_cur_green;
+static bool aw20036_miniloong_cur_blue;
 
 static const unsigned int aw20036_miniloong_blue[] = {
 	0, 3, 6, 9, 12, 15, 18, 21,
@@ -1623,6 +1619,60 @@ static const unsigned int aw20036_miniloong_green[] = {
 
 static const unsigned int aw20036_miniloong_red[] = {
 	2, 5, 8, 11, 14, 17, 20, 23,
+};
+
+enum aw20036_miniloong_effect {
+	AW20036_MINILOONG_EFFECT_OFF = 0,
+	AW20036_MINILOONG_EFFECT_SOLID,
+	AW20036_MINILOONG_EFFECT_PULSE,
+	AW20036_MINILOONG_EFFECT_BLINK,
+	AW20036_MINILOONG_EFFECT_BREATHE,
+	AW20036_MINILOONG_EFFECT_RAINBOW,
+};
+
+static DEFINE_MUTEX(aw20036_miniloong_lock);
+static void aw20036_miniloong_effect_work_func(struct work_struct *work);
+static DECLARE_DELAYED_WORK(aw20036_miniloong_effect_work,
+			     aw20036_miniloong_effect_work_func);
+
+static enum aw20036_miniloong_effect aw20036_miniloong_effect_state =
+	AW20036_MINILOONG_EFFECT_SOLID;
+static unsigned int aw20036_miniloong_pulse_on_ms = 800;
+static unsigned int aw20036_miniloong_pulse_off_ms = 800;
+static unsigned int aw20036_miniloong_blink_on_ms = 250;
+static unsigned int aw20036_miniloong_blink_off_ms = 250;
+static unsigned int aw20036_miniloong_breathe_step_ms = 30;
+static unsigned int aw20036_miniloong_rainbow_step_ms = 120;
+static bool aw20036_miniloong_anim_lit;
+static unsigned int aw20036_miniloong_breathe_index;
+static unsigned int aw20036_miniloong_rainbow_index;
+
+/*
+ * Gamma-like table for a natural-looking breathing effect.  Values are
+ * scaled against miniloong_brightness at runtime, so the configured max
+ * brightness is still respected.
+ */
+static const unsigned char aw20036_miniloong_breathe_table[] = {
+	0, 1, 1, 2, 3, 4, 5, 7, 9, 12, 16, 21, 27,
+	35, 45, 58, 74, 94, 119, 150, 188, 235, 255,
+	235, 188, 150, 119, 94, 74, 58, 45, 35,
+	27, 21, 16, 12, 9, 7, 5, 4, 3, 2, 1, 1,
+};
+
+struct aw20036_miniloong_rgb_step {
+	unsigned char red;
+	unsigned char green;
+	unsigned char blue;
+};
+
+/* Smooth rainbow sequence with intermediate blends instead of six hard jumps. */
+static const struct aw20036_miniloong_rgb_step aw20036_miniloong_rainbow_table[] = {
+	{255,   0,   0}, {255,  64,   0}, {255, 128,   0}, {255, 191,   0},
+	{255, 255,   0}, {191, 255,   0}, {128, 255,   0}, { 64, 255,   0},
+	{  0, 255,   0}, {  0, 255,  64}, {  0, 255, 128}, {  0, 255, 191},
+	{  0, 255, 255}, {  0, 191, 255}, {  0, 128, 255}, {  0,  64, 255},
+	{  0,   0, 255}, { 64,   0, 255}, {128,   0, 255}, {191,   0, 255},
+	{255,   0, 255}, {255,   0, 191}, {255,   0, 128}, {255,   0,  64},
 };
 
 static int aw20036_dbg_write_channel_noclear(struct aw20036 *aw20036,
@@ -1643,7 +1693,7 @@ static int aw20036_dbg_write_channel_noclear(struct aw20036 *aw20036,
 		brightness = 255;
 
 	ret = aw20036_i2c_write(aw20036, dim_reg,
-			      brightness ? AW20036_DBGCTR_DIM : 0x00);
+				  brightness ? AW20036_DBGCTR_DIM : 0x00);
 	if (ret < 0)
 		return ret;
 
@@ -1668,20 +1718,40 @@ static int aw20036_miniloong_write_group(struct aw20036 *aw20036,
 	return 0;
 }
 
-static int aw20036_miniloong_set_color(struct aw20036 *aw20036,
-				       bool red, bool green, bool blue,
-				       unsigned int brightness)
+static unsigned int aw20036_miniloong_scale(unsigned int value,
+						 unsigned int brightness)
+{
+	if (brightness > 255)
+		brightness = 255;
+	if (value > 255)
+		value = 255;
+
+	return DIV_ROUND_CLOSEST(value * brightness, 255);
+}
+
+static int aw20036_miniloong_write_rgb(struct aw20036 *aw20036,
+				       unsigned int red_brightness,
+				       unsigned int green_brightness,
+				       unsigned int blue_brightness)
 {
 	int ret;
 
-	if (brightness > 255)
-		brightness = 255;
+	if (red_brightness > 255)
+		red_brightness = 255;
+	if (green_brightness > 255)
+		green_brightness = 255;
+	if (blue_brightness > 255)
+		blue_brightness = 255;
 
+	/*
+	 * Do not clear the whole debug page before each animation frame.
+	 * Clearing first creates a visible off-gap, which makes breathe and
+	 * rainbow look like rapid flashing.  Instead, keep the AW20036 awake,
+	 * select the working debug page, and write every known Miniloong RGB
+	 * group directly to its desired brightness.  Groups that should be off
+	 * are written as zero in-place, without a global clear/standby cycle.
+	 */
 	ret = aw20036_dbg_enable(aw20036);
-	if (ret < 0)
-		return ret;
-
-	ret = aw20036_dbg_clear_channels(aw20036);
 	if (ret < 0)
 		return ret;
 
@@ -1689,44 +1759,157 @@ static int aw20036_miniloong_set_color(struct aw20036 *aw20036,
 	if (ret < 0)
 		return ret;
 
-	if (red) {
-		ret = aw20036_miniloong_write_group(aw20036,
-				aw20036_miniloong_red,
-				ARRAY_SIZE(aw20036_miniloong_red), brightness);
-		if (ret < 0)
-			return ret;
-	}
+	ret = aw20036_miniloong_write_group(aw20036,
+			aw20036_miniloong_red,
+			ARRAY_SIZE(aw20036_miniloong_red),
+			red_brightness);
+	if (ret < 0)
+		return ret;
 
-	if (green) {
-		ret = aw20036_miniloong_write_group(aw20036,
-				aw20036_miniloong_green,
-				ARRAY_SIZE(aw20036_miniloong_green), brightness);
-		if (ret < 0)
-			return ret;
-	}
+	ret = aw20036_miniloong_write_group(aw20036,
+			aw20036_miniloong_green,
+			ARRAY_SIZE(aw20036_miniloong_green),
+			green_brightness);
+	if (ret < 0)
+		return ret;
 
-	if (blue) {
-		ret = aw20036_miniloong_write_group(aw20036,
-				aw20036_miniloong_blue,
-				ARRAY_SIZE(aw20036_miniloong_blue), brightness);
-		if (ret < 0)
-			return ret;
-	}
+	ret = aw20036_miniloong_write_group(aw20036,
+			aw20036_miniloong_blue,
+			ARRAY_SIZE(aw20036_miniloong_blue),
+			blue_brightness);
+	if (ret < 0)
+		return ret;
 
-	if (!red && !green && !blue) {
-		aw20036_i2c_write(aw20036, 0xF0, 0xC0);
-		aw20036_i2c_write(aw20036, 0x01, 0x80);
-		aw20036->operating_mode = 2;
-	}
+	aw20036->operating_mode = 1;
+	return 0;
+}
+
+static int aw20036_miniloong_write_color(struct aw20036 *aw20036,
+					 bool red, bool green, bool blue,
+					 unsigned int brightness)
+{
+	return aw20036_miniloong_write_rgb(aw20036,
+			red ? brightness : 0,
+			green ? brightness : 0,
+			blue ? brightness : 0);
+}
+
+static int aw20036_miniloong_set_color(struct aw20036 *aw20036,
+				       bool red, bool green, bool blue,
+				       unsigned int brightness)
+{
+	int ret;
+
+	ret = aw20036_miniloong_write_color(aw20036, red, green, blue,
+						 brightness);
+	if (ret < 0)
+		return ret;
+
+	aw20036_miniloong_cur_red = red;
+	aw20036_miniloong_cur_green = green;
+	aw20036_miniloong_cur_blue = blue;
 
 	return 0;
+}
+
+static int aw20036_miniloong_apply_current_color(struct aw20036 *aw20036,
+						 unsigned int brightness)
+{
+	return aw20036_miniloong_write_color(aw20036,
+			aw20036_miniloong_cur_red,
+			aw20036_miniloong_cur_green,
+			aw20036_miniloong_cur_blue,
+			brightness);
+}
+
+static void aw20036_miniloong_schedule_effect(unsigned int delay_ms)
+{
+	schedule_delayed_work(&aw20036_miniloong_effect_work,
+			      msecs_to_jiffies(delay_ms));
+}
+
+static void aw20036_miniloong_effect_work_func(struct work_struct *work)
+{
+	struct aw20036 *aw20036 = g_aw20036;
+	unsigned int brightness = aw20036_miniloong_brightness;
+	unsigned int delay_ms = 0;
+	int ret = 0;
+
+	if (!aw20036)
+		return;
+
+	mutex_lock(&aw20036_miniloong_lock);
+
+	switch (aw20036_miniloong_effect_state) {
+	case AW20036_MINILOONG_EFFECT_PULSE:
+		if (aw20036_miniloong_anim_lit) {
+			ret = aw20036_miniloong_apply_current_color(aw20036, 0);
+			delay_ms = aw20036_miniloong_pulse_off_ms;
+			aw20036_miniloong_anim_lit = false;
+		} else {
+			ret = aw20036_miniloong_apply_current_color(aw20036, brightness);
+			delay_ms = aw20036_miniloong_pulse_on_ms;
+			aw20036_miniloong_anim_lit = true;
+		}
+		break;
+	case AW20036_MINILOONG_EFFECT_BLINK:
+		if (aw20036_miniloong_anim_lit) {
+			ret = aw20036_miniloong_apply_current_color(aw20036, 0);
+			delay_ms = aw20036_miniloong_blink_off_ms;
+			aw20036_miniloong_anim_lit = false;
+		} else {
+			ret = aw20036_miniloong_apply_current_color(aw20036, brightness);
+			delay_ms = aw20036_miniloong_blink_on_ms;
+			aw20036_miniloong_anim_lit = true;
+		}
+		break;
+	case AW20036_MINILOONG_EFFECT_BREATHE: {
+		unsigned int table_value;
+		unsigned int scaled_brightness;
+
+		table_value = aw20036_miniloong_breathe_table[
+			aw20036_miniloong_breathe_index %
+			ARRAY_SIZE(aw20036_miniloong_breathe_table)];
+		scaled_brightness = aw20036_miniloong_scale(table_value, brightness);
+		ret = aw20036_miniloong_apply_current_color(aw20036,
+							scaled_brightness);
+		aw20036_miniloong_breathe_index++;
+		delay_ms = aw20036_miniloong_breathe_step_ms;
+		break;
+	}
+	case AW20036_MINILOONG_EFFECT_RAINBOW: {
+		const struct aw20036_miniloong_rgb_step *step;
+		unsigned int idx;
+
+		idx = aw20036_miniloong_rainbow_index %
+			ARRAY_SIZE(aw20036_miniloong_rainbow_table);
+		step = &aw20036_miniloong_rainbow_table[idx];
+		ret = aw20036_miniloong_write_rgb(aw20036,
+			aw20036_miniloong_scale(step->red, brightness),
+			aw20036_miniloong_scale(step->green, brightness),
+			aw20036_miniloong_scale(step->blue, brightness));
+		aw20036_miniloong_rainbow_index++;
+		delay_ms = aw20036_miniloong_rainbow_step_ms;
+		break;
+	}
+	default:
+		break;
+	}
+
+	mutex_unlock(&aw20036_miniloong_lock);
+
+	if (!ret && delay_ms)
+		aw20036_miniloong_schedule_effect(delay_ms);
 }
 
 static ssize_t aw20036_miniloong_brightness_store(struct device *dev,
 						 struct device_attribute *attr,
 						 const char *buf, size_t len)
 {
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct aw20036 *aw20036 = container_of(led_cdev, struct aw20036, cdev);
 	unsigned int brightness;
+	int ret = 0;
 
 	if (kstrtouint(buf, 0, &brightness))
 		return -EINVAL;
@@ -1734,8 +1917,13 @@ static ssize_t aw20036_miniloong_brightness_store(struct device *dev,
 	if (brightness > 255)
 		brightness = 255;
 
+	mutex_lock(&aw20036_miniloong_lock);
 	aw20036_miniloong_brightness = brightness;
-	return len;
+	if (aw20036_miniloong_effect_state == AW20036_MINILOONG_EFFECT_SOLID)
+		ret = aw20036_miniloong_apply_current_color(aw20036, brightness);
+	mutex_unlock(&aw20036_miniloong_lock);
+
+	return ret < 0 ? ret : len;
 }
 
 static ssize_t aw20036_miniloong_brightness_show(struct device *dev,
@@ -1754,6 +1942,7 @@ static ssize_t aw20036_miniloong_color_store(struct device *dev,
 	unsigned int brightness = aw20036_miniloong_brightness;
 	int ret;
 
+	mutex_lock(&aw20036_miniloong_lock);
 	if (sysfs_streq(buf, "off"))
 		ret = aw20036_miniloong_set_color(aw20036, false, false, false, 0);
 	else if (sysfs_streq(buf, "red"))
@@ -1771,7 +1960,8 @@ static ssize_t aw20036_miniloong_color_store(struct device *dev,
 	else if (sysfs_streq(buf, "white"))
 		ret = aw20036_miniloong_set_color(aw20036, true, true, true, brightness);
 	else
-		return -EINVAL;
+		ret = -EINVAL;
+	mutex_unlock(&aw20036_miniloong_lock);
 
 	return ret < 0 ? ret : len;
 }
@@ -1785,6 +1975,174 @@ static ssize_t aw20036_miniloong_color_show(struct device *dev,
 		"brightness: /sys/class/leds/aw20036_led/miniloong_brightness\n");
 }
 
+static ssize_t aw20036_miniloong_effect_store(struct device *dev,
+					     struct device_attribute *attr,
+					     const char *buf, size_t len)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct aw20036 *aw20036 = container_of(led_cdev, struct aw20036, cdev);
+	bool schedule_now = false;
+	int ret = 0;
+
+	cancel_delayed_work_sync(&aw20036_miniloong_effect_work);
+
+	mutex_lock(&aw20036_miniloong_lock);
+	aw20036_miniloong_anim_lit = false;
+	aw20036_miniloong_breathe_index = 0;
+	aw20036_miniloong_rainbow_index = 0;
+
+	if (sysfs_streq(buf, "off")) {
+		aw20036_miniloong_effect_state = AW20036_MINILOONG_EFFECT_OFF;
+		ret = aw20036_miniloong_set_color(aw20036, false, false, false, 0);
+	} else if (sysfs_streq(buf, "solid")) {
+		aw20036_miniloong_effect_state = AW20036_MINILOONG_EFFECT_SOLID;
+		ret = aw20036_miniloong_apply_current_color(aw20036,
+				aw20036_miniloong_brightness);
+	} else if (sysfs_streq(buf, "pulse")) {
+		aw20036_miniloong_effect_state = AW20036_MINILOONG_EFFECT_PULSE;
+		schedule_now = true;
+	} else if (sysfs_streq(buf, "blink")) {
+		aw20036_miniloong_effect_state = AW20036_MINILOONG_EFFECT_BLINK;
+		schedule_now = true;
+	} else if (sysfs_streq(buf, "breathe")) {
+		aw20036_miniloong_effect_state = AW20036_MINILOONG_EFFECT_BREATHE;
+		schedule_now = true;
+	} else if (sysfs_streq(buf, "rainbow")) {
+		aw20036_miniloong_effect_state = AW20036_MINILOONG_EFFECT_RAINBOW;
+		schedule_now = true;
+	} else {
+		ret = -EINVAL;
+	}
+	mutex_unlock(&aw20036_miniloong_lock);
+
+	if (!ret && schedule_now)
+		aw20036_miniloong_schedule_effect(0);
+
+	return ret < 0 ? ret : len;
+}
+
+static ssize_t aw20036_miniloong_effect_show(struct device *dev,
+					    struct device_attribute *attr,
+					    char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE,
+		"solid pulse blink breathe rainbow off\n"
+		"pulse/blink/breathe/rainbow continue until changed to solid/off.\n"
+		"breathe uses smooth in-place brightness updates; rainbow uses blended in-place RGB steps.\n");
+}
+
+static ssize_t aw20036_miniloong_pulse_rate_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	unsigned int on_ms, off_ms;
+
+	if (sscanf(buf, "%u %u", &on_ms, &off_ms) != 2)
+		return -EINVAL;
+
+	if (!on_ms || !off_ms)
+		return -EINVAL;
+
+	mutex_lock(&aw20036_miniloong_lock);
+	aw20036_miniloong_pulse_on_ms = on_ms;
+	aw20036_miniloong_pulse_off_ms = off_ms;
+	mutex_unlock(&aw20036_miniloong_lock);
+
+	return len;
+}
+
+static ssize_t aw20036_miniloong_pulse_rate_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u %u\n",
+		aw20036_miniloong_pulse_on_ms,
+		aw20036_miniloong_pulse_off_ms);
+}
+
+static ssize_t aw20036_miniloong_blink_rate_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	unsigned int on_ms, off_ms;
+
+	if (sscanf(buf, "%u %u", &on_ms, &off_ms) != 2)
+		return -EINVAL;
+
+	if (!on_ms || !off_ms)
+		return -EINVAL;
+
+	mutex_lock(&aw20036_miniloong_lock);
+	aw20036_miniloong_blink_on_ms = on_ms;
+	aw20036_miniloong_blink_off_ms = off_ms;
+	mutex_unlock(&aw20036_miniloong_lock);
+
+	return len;
+}
+
+static ssize_t aw20036_miniloong_blink_rate_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u %u\n",
+		aw20036_miniloong_blink_on_ms,
+		aw20036_miniloong_blink_off_ms);
+}
+
+static ssize_t aw20036_miniloong_breathe_rate_store(struct device *dev,
+						   struct device_attribute *attr,
+						   const char *buf, size_t len)
+{
+	unsigned int step_ms;
+
+	if (kstrtouint(buf, 0, &step_ms))
+		return -EINVAL;
+
+	if (!step_ms)
+		return -EINVAL;
+
+	mutex_lock(&aw20036_miniloong_lock);
+	aw20036_miniloong_breathe_step_ms = step_ms;
+	mutex_unlock(&aw20036_miniloong_lock);
+
+	return len;
+}
+
+static ssize_t aw20036_miniloong_breathe_rate_show(struct device *dev,
+						  struct device_attribute *attr,
+						  char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n",
+		aw20036_miniloong_breathe_step_ms);
+}
+
+static ssize_t aw20036_miniloong_rainbow_rate_store(struct device *dev,
+						   struct device_attribute *attr,
+						   const char *buf, size_t len)
+{
+	unsigned int step_ms;
+
+	if (kstrtouint(buf, 0, &step_ms))
+		return -EINVAL;
+
+	if (!step_ms)
+		return -EINVAL;
+
+	mutex_lock(&aw20036_miniloong_lock);
+	aw20036_miniloong_rainbow_step_ms = step_ms;
+	mutex_unlock(&aw20036_miniloong_lock);
+
+	return len;
+}
+
+static ssize_t aw20036_miniloong_rainbow_rate_show(struct device *dev,
+						  struct device_attribute *attr,
+						  char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n",
+		aw20036_miniloong_rainbow_step_ms);
+}
+
 static ssize_t aw20036_dbg_channel_store(struct device *dev,
 						 struct device_attribute *attr,
 						 const char *buf, size_t len)
@@ -1795,21 +2153,30 @@ static ssize_t aw20036_dbg_channel_store(struct device *dev,
 	unsigned int brightness;
 	int ret;
 
+	cancel_delayed_work_sync(&aw20036_miniloong_effect_work);
+
+	mutex_lock(&aw20036_miniloong_lock);
+	aw20036_miniloong_effect_state = AW20036_MINILOONG_EFFECT_SOLID;
+
 	if (sysfs_streq(buf, "off")) {
 		ret = aw20036_dbg_set_all_channels(aw20036, 0);
+		mutex_unlock(&aw20036_miniloong_lock);
 		return ret < 0 ? ret : len;
 	}
 
 	if (sscanf(buf, "all %u", &brightness) == 1) {
 		ret = aw20036_dbg_set_all_channels(aw20036, brightness);
+		mutex_unlock(&aw20036_miniloong_lock);
 		return ret < 0 ? ret : len;
 	}
 
 	if (sscanf(buf, "%u %u", &channel, &brightness) == 2) {
 		ret = aw20036_dbg_set_channel(aw20036, channel, brightness);
+		mutex_unlock(&aw20036_miniloong_lock);
 		return ret < 0 ? ret : len;
 	}
 
+	mutex_unlock(&aw20036_miniloong_lock);
 	return -EINVAL;
 }
 
@@ -1818,10 +2185,10 @@ static ssize_t aw20036_dbg_channel_show(struct device *dev,
 						char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE,
-		"Usage: echo '<channel> <brightness>' > dbg_channel\\n"
-		"       echo 'all <brightness>' > dbg_channel\\n"
-		"       echo 'off' > dbg_channel\\n"
-		"Debug channels are channel pairs on AW20036 page 0xC4.\\n");
+		"Usage: echo '<channel> <brightness>' > dbg_channel\n"
+		"       echo 'all <brightness>' > dbg_channel\n"
+		"       echo 'off' > dbg_channel\n"
+		"Debug channels are channel pairs on AW20036 page 0xC4.\n");
 }
 
 static DEVICE_ATTR(reg, 0664, aw20036_reg_show, aw20036_reg_store);
@@ -1845,6 +2212,21 @@ static DEVICE_ATTR(miniloong_color, 0664,
 static DEVICE_ATTR(miniloong_brightness, 0664,
 		   aw20036_miniloong_brightness_show,
 		   aw20036_miniloong_brightness_store);
+static DEVICE_ATTR(miniloong_effect, 0664,
+		   aw20036_miniloong_effect_show,
+		   aw20036_miniloong_effect_store);
+static DEVICE_ATTR(miniloong_pulse_rate, 0664,
+		   aw20036_miniloong_pulse_rate_show,
+		   aw20036_miniloong_pulse_rate_store);
+static DEVICE_ATTR(miniloong_blink_rate, 0664,
+		   aw20036_miniloong_blink_rate_show,
+		   aw20036_miniloong_blink_rate_store);
+static DEVICE_ATTR(miniloong_breathe_rate, 0664,
+		   aw20036_miniloong_breathe_rate_show,
+		   aw20036_miniloong_breathe_rate_store);
+static DEVICE_ATTR(miniloong_rainbow_rate, 0664,
+		   aw20036_miniloong_rainbow_rate_show,
+		   aw20036_miniloong_rainbow_rate_store);
 
 static struct attribute *aw20036_attributes[] = {
 	&dev_attr_reg.attr,
@@ -1864,6 +2246,11 @@ static struct attribute *aw20036_attributes[] = {
 	&dev_attr_dbg_channel.attr,
 	&dev_attr_miniloong_color.attr,
 	&dev_attr_miniloong_brightness.attr,
+	&dev_attr_miniloong_effect.attr,
+	&dev_attr_miniloong_pulse_rate.attr,
+	&dev_attr_miniloong_blink_rate.attr,
+	&dev_attr_miniloong_breathe_rate.attr,
+	&dev_attr_miniloong_rainbow_rate.attr,
 	NULL,
 };
 
@@ -2514,6 +2901,7 @@ static int aw20036_i2c_remove(struct i2c_client *i2c)
 	struct aw20036 *aw20036 = i2c_get_clientdata(i2c);
 
 	pr_info("%s enter\n", __func__);
+	cancel_delayed_work_sync(&aw20036_miniloong_effect_work);
 	sysfs_remove_group(&aw20036->cdev.dev->kobj, &aw20036_attribute_group);
 	led_classdev_unregister(&aw20036->cdev);
 
