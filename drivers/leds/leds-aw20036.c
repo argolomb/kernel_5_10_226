@@ -1486,6 +1486,344 @@ static ssize_t aw20036_always_on_store(struct device *dev,
 	return len;
 }
 
+
+/*
+ * Miniloong / AW20036 debug-page channel control.
+ *
+ * On this device, the normal page-1/page-2 matrix paths used by
+ * single_brightness, frame_brightness and factory_test may not light the
+ * joystick LEDs.  The generic brightness callback does work because it uses
+ * the AW20036 debug page 0xC4.  This sysfs entry exposes that same working
+ * path, but for one debug channel at a time, so the physical LED channels can
+ * be mapped safely from userspace.
+ *
+ * Usage:
+ *   echo "<channel> <brightness>" > dbg_channel
+ *   echo "all <brightness>"       > dbg_channel
+ *   echo "off"                    > dbg_channel
+ */
+static int aw20036_dbg_clear_channels(struct aw20036 *aw20036)
+{
+	int i;
+	int ret = 0;
+
+	ret = aw20036_i2c_write(aw20036, 0xF0, 0xC4);
+	if (ret < 0)
+		return ret;
+
+	for (i = 0; i < AW20036_REG_NUM_PAG4; i++) {
+		ret = aw20036_i2c_write(aw20036, i, 0x00);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int aw20036_dbg_enable(struct aw20036 *aw20036)
+{
+	int ret;
+
+	/* Enable the chip without toggling reset/hwen. */
+	ret = aw20036_i2c_write(aw20036, 0xF0, 0xC0);
+	if (ret < 0)
+		return ret;
+
+	ret = aw20036_i2c_write(aw20036, 0x01, 0x00);
+	if (ret < 0)
+		return ret;
+
+	aw20036->operating_mode = 1;
+	return 0;
+}
+
+static int aw20036_dbg_set_channel(struct aw20036 *aw20036,
+					   unsigned int channel,
+					   unsigned int brightness)
+{
+	unsigned int dim_reg;
+	unsigned int br_reg;
+	int ret;
+
+	dim_reg = channel * 2;
+	br_reg = dim_reg + 1;
+
+	if (br_reg >= AW20036_REG_NUM_PAG4)
+		return -EINVAL;
+
+	if (brightness > 255)
+		brightness = 255;
+
+	ret = aw20036_dbg_enable(aw20036);
+	if (ret < 0)
+		return ret;
+
+	ret = aw20036_dbg_clear_channels(aw20036);
+	if (ret < 0)
+		return ret;
+
+	ret = aw20036_i2c_write(aw20036, 0xF0, 0xC4);
+	if (ret < 0)
+		return ret;
+
+	ret = aw20036_i2c_write(aw20036, dim_reg, AW20036_DBGCTR_DIM);
+	if (ret < 0)
+		return ret;
+
+	return aw20036_i2c_write(aw20036, br_reg, brightness);
+}
+
+static int aw20036_dbg_set_all_channels(struct aw20036 *aw20036,
+						unsigned int brightness)
+{
+	int ret;
+
+	if (brightness > 255)
+		brightness = 255;
+
+	ret = aw20036_dbg_enable(aw20036);
+	if (ret < 0)
+		return ret;
+
+	ret = aw20036_dbgdim_cfg(aw20036, brightness ? AW20036_DBGCTR_DIM : 0x00);
+	if (ret < 0)
+		return ret;
+
+	ret = aw20036_dbgfdad_cfg(aw20036, brightness);
+	if (ret < 0)
+		return ret;
+
+	if (!brightness) {
+		aw20036_i2c_write(aw20036, 0xF0, 0xC0);
+		aw20036_i2c_write(aw20036, 0x01, 0x80);
+		aw20036->operating_mode = 2;
+	}
+
+	return 0;
+}
+
+
+/*
+ * Miniloong fixed RGB map found from dbg_channel testing:
+ *   Blue:  0 3 6 9 12 15 18 21
+ *   Green: 1 4 7 10 13 16 19 22
+ *   Red:   2 5 8 11 14 17 20 23
+ *
+ * These are debug-page channel numbers, not normal AW20036 matrix channels.
+ */
+static unsigned int aw20036_miniloong_brightness = 120;
+
+static const unsigned int aw20036_miniloong_blue[] = {
+	0, 3, 6, 9, 12, 15, 18, 21,
+};
+
+static const unsigned int aw20036_miniloong_green[] = {
+	1, 4, 7, 10, 13, 16, 19, 22,
+};
+
+static const unsigned int aw20036_miniloong_red[] = {
+	2, 5, 8, 11, 14, 17, 20, 23,
+};
+
+static int aw20036_dbg_write_channel_noclear(struct aw20036 *aw20036,
+					     unsigned int channel,
+					     unsigned int brightness)
+{
+	unsigned int dim_reg;
+	unsigned int br_reg;
+	int ret;
+
+	dim_reg = channel * 2;
+	br_reg = dim_reg + 1;
+
+	if (br_reg >= AW20036_REG_NUM_PAG4)
+		return -EINVAL;
+
+	if (brightness > 255)
+		brightness = 255;
+
+	ret = aw20036_i2c_write(aw20036, dim_reg,
+			      brightness ? AW20036_DBGCTR_DIM : 0x00);
+	if (ret < 0)
+		return ret;
+
+	return aw20036_i2c_write(aw20036, br_reg, brightness);
+}
+
+static int aw20036_miniloong_write_group(struct aw20036 *aw20036,
+					 const unsigned int *channels,
+					 unsigned int count,
+					 unsigned int brightness)
+{
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < count; i++) {
+		ret = aw20036_dbg_write_channel_noclear(aw20036,
+							channels[i], brightness);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int aw20036_miniloong_set_color(struct aw20036 *aw20036,
+				       bool red, bool green, bool blue,
+				       unsigned int brightness)
+{
+	int ret;
+
+	if (brightness > 255)
+		brightness = 255;
+
+	ret = aw20036_dbg_enable(aw20036);
+	if (ret < 0)
+		return ret;
+
+	ret = aw20036_dbg_clear_channels(aw20036);
+	if (ret < 0)
+		return ret;
+
+	ret = aw20036_i2c_write(aw20036, 0xF0, 0xC4);
+	if (ret < 0)
+		return ret;
+
+	if (red) {
+		ret = aw20036_miniloong_write_group(aw20036,
+				aw20036_miniloong_red,
+				ARRAY_SIZE(aw20036_miniloong_red), brightness);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (green) {
+		ret = aw20036_miniloong_write_group(aw20036,
+				aw20036_miniloong_green,
+				ARRAY_SIZE(aw20036_miniloong_green), brightness);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (blue) {
+		ret = aw20036_miniloong_write_group(aw20036,
+				aw20036_miniloong_blue,
+				ARRAY_SIZE(aw20036_miniloong_blue), brightness);
+		if (ret < 0)
+			return ret;
+	}
+
+	if (!red && !green && !blue) {
+		aw20036_i2c_write(aw20036, 0xF0, 0xC0);
+		aw20036_i2c_write(aw20036, 0x01, 0x80);
+		aw20036->operating_mode = 2;
+	}
+
+	return 0;
+}
+
+static ssize_t aw20036_miniloong_brightness_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	unsigned int brightness;
+
+	if (kstrtouint(buf, 0, &brightness))
+		return -EINVAL;
+
+	if (brightness > 255)
+		brightness = 255;
+
+	aw20036_miniloong_brightness = brightness;
+	return len;
+}
+
+static ssize_t aw20036_miniloong_brightness_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE, "%u\n", aw20036_miniloong_brightness);
+}
+
+static ssize_t aw20036_miniloong_color_store(struct device *dev,
+					    struct device_attribute *attr,
+					    const char *buf, size_t len)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct aw20036 *aw20036 = container_of(led_cdev, struct aw20036, cdev);
+	unsigned int brightness = aw20036_miniloong_brightness;
+	int ret;
+
+	if (sysfs_streq(buf, "off"))
+		ret = aw20036_miniloong_set_color(aw20036, false, false, false, 0);
+	else if (sysfs_streq(buf, "red"))
+		ret = aw20036_miniloong_set_color(aw20036, true, false, false, brightness);
+	else if (sysfs_streq(buf, "green"))
+		ret = aw20036_miniloong_set_color(aw20036, false, true, false, brightness);
+	else if (sysfs_streq(buf, "blue"))
+		ret = aw20036_miniloong_set_color(aw20036, false, false, true, brightness);
+	else if (sysfs_streq(buf, "yellow"))
+		ret = aw20036_miniloong_set_color(aw20036, true, true, false, brightness);
+	else if (sysfs_streq(buf, "cyan"))
+		ret = aw20036_miniloong_set_color(aw20036, false, true, true, brightness);
+	else if (sysfs_streq(buf, "magenta"))
+		ret = aw20036_miniloong_set_color(aw20036, true, false, true, brightness);
+	else if (sysfs_streq(buf, "white"))
+		ret = aw20036_miniloong_set_color(aw20036, true, true, true, brightness);
+	else
+		return -EINVAL;
+
+	return ret < 0 ? ret : len;
+}
+
+static ssize_t aw20036_miniloong_color_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE,
+		"off red yellow green blue cyan magenta white\n"
+		"brightness: /sys/class/leds/aw20036_led/miniloong_brightness\n");
+}
+
+static ssize_t aw20036_dbg_channel_store(struct device *dev,
+						 struct device_attribute *attr,
+						 const char *buf, size_t len)
+{
+	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	struct aw20036 *aw20036 = container_of(led_cdev, struct aw20036, cdev);
+	unsigned int channel;
+	unsigned int brightness;
+	int ret;
+
+	if (sysfs_streq(buf, "off")) {
+		ret = aw20036_dbg_set_all_channels(aw20036, 0);
+		return ret < 0 ? ret : len;
+	}
+
+	if (sscanf(buf, "all %u", &brightness) == 1) {
+		ret = aw20036_dbg_set_all_channels(aw20036, brightness);
+		return ret < 0 ? ret : len;
+	}
+
+	if (sscanf(buf, "%u %u", &channel, &brightness) == 2) {
+		ret = aw20036_dbg_set_channel(aw20036, channel, brightness);
+		return ret < 0 ? ret : len;
+	}
+
+	return -EINVAL;
+}
+
+static ssize_t aw20036_dbg_channel_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	return scnprintf(buf, PAGE_SIZE,
+		"Usage: echo '<channel> <brightness>' > dbg_channel\\n"
+		"       echo 'all <brightness>' > dbg_channel\\n"
+		"       echo 'off' > dbg_channel\\n"
+		"Debug channels are channel pairs on AW20036 page 0xC4.\\n");
+}
+
 static DEVICE_ATTR(reg, 0664, aw20036_reg_show, aw20036_reg_store);
 static DEVICE_ATTR(hwen, 0664, aw20036_hwen_show, aw20036_hwen_store);
 static DEVICE_ATTR(imax, 0664, aw20036_imax_show, aw20036_imax_store);
@@ -1500,6 +1838,13 @@ static DEVICE_ATTR(dev_color, 0664, aw20036_dev_color_show, aw20036_dev_color_st
 static DEVICE_ATTR(factory_test, 0664, aw20036_factory_test_show, aw20036_factory_test_store);
 static DEVICE_ATTR(vip_notification, 0220, NULL, aw20036_vip_notification_store);
 static DEVICE_ATTR(always_on, 0664, aw20036_always_on_show, aw20036_always_on_store);
+static DEVICE_ATTR(dbg_channel, 0664, aw20036_dbg_channel_show, aw20036_dbg_channel_store);
+static DEVICE_ATTR(miniloong_color, 0664,
+		   aw20036_miniloong_color_show,
+		   aw20036_miniloong_color_store);
+static DEVICE_ATTR(miniloong_brightness, 0664,
+		   aw20036_miniloong_brightness_show,
+		   aw20036_miniloong_brightness_store);
 
 static struct attribute *aw20036_attributes[] = {
 	&dev_attr_reg.attr,
@@ -1516,6 +1861,9 @@ static struct attribute *aw20036_attributes[] = {
 	&dev_attr_factory_test.attr,
 	&dev_attr_vip_notification.attr,
 	&dev_attr_always_on.attr,
+	&dev_attr_dbg_channel.attr,
+	&dev_attr_miniloong_color.attr,
+	&dev_attr_miniloong_brightness.attr,
 	NULL,
 };
 
