@@ -55,6 +55,7 @@ obj-$(CONFIG_KEYBOARD_PXA27x)		+= pxa27x_keypad.o
 obj-$(CONFIG_KEYBOARD_PXA930_ROTARY)	+= pxa930_rotary.o
 obj-$(CONFIG_KEYBOARD_QT1050)           += qt1050.o
 obj-$(CONFIG_KEYBOARD_QT1070)           += qt1070.o
+obj-$(CONFIG_KEYBOARD_R43_I2C)		+= r43-i2c-keys.o
 obj-$(CONFIG_KEYBOARD_QT2160)		+= qt2160.o
 obj-$(CONFIG_KEYBOARD_SAMSUNG)		+= samsung-keypad.o
 obj-$(CONFIG_KEYBOARD_SH_KEYSC)		+= sh_keysc.o

@@ -1,0 +1,630 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * R43 RK3566 handheld - phase 1.1 DTS
+ *
+ * Base: rk3566-evb2-lp4x-v10-linux.dts from Rockchip/Firefly 5.10 BSP.
+ * Overrides were derived from the decompiled original firmware DTS
+ * rk3566-r43-inspect.dts.
+ *
+ * Goal of this phase:
+ *   - keep the known-good Rockchip 5.10 EVB include stack;
+ *   - remove inherited linux/rootfs bootargs;
+ *   - switch the active display route to LVDS/panel like the original firmware;
+ *   - match storage/MMC/I2C/audio/buttons/battery status as closely as possible;
+ *   - avoid enabling risky or noisy EVB-only peripherals.
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/power/rk3568-power.h>
+#include <dt-bindings/clock/rk3568-cru.h>
+#include "rk3566-evb2-lp4x-v10.dtsi"
+#include "rk3568-linux.dtsi"
+#include <dt-bindings/display/rockchip_vop.h>
+
+/ {
+	model = "R43 RK3566 Handheld phase 1";
+	compatible = "rockchip,rk3566-r43", "rockchip,rk3566";
+
+	/* Override bootargs inherited from rk3568-linux.dtsi. */
+	chosen {
+		bootargs = "";
+		stdout-path = "serial2:1500000n8";
+	};
+
+	fiq-debugger {
+		compatible = "rockchip,fiq-debugger";
+		rockchip,serial-id = <2>;
+		rockchip,wake-irq = <0>;
+		rockchip,irq-mode-enable = <1>;
+		rockchip,baudrate = <1500000>;
+		interrupts = <0 252 8>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&uart2m0_xfer>;
+		status = "okay";
+	};
+
+	/* Fixed rails seen in the original firmware DTS. */
+	r43_dc_5v: dc-5v {
+		compatible = "regulator-fixed";
+		regulator-name = "dc_5v";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+	};
+
+	r43_vcc5v0_sys: vcc5v0-sys {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_sys";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		vin-supply = <&r43_dc_5v>;
+	};
+
+	r43_vcc_3v3: vcc_3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_3v3";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&r43_vcc5v0_sys>;
+	};
+
+	r43_vcc_1v8: vcc_1v8 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_1v8";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		vin-supply = <&r43_vcc_3v3>;
+	};
+
+	r43_vdd_gpu: vdd-gpu {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd_gpu";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <1000000>;
+		regulator-max-microvolt = <1000000>;
+		vin-supply = <&r43_vcc_3v3>;
+	};
+
+	r43_vcc3v3_lcd1_n: vcc3v3-lcd1-n {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3_lcd1_n";
+		regulator-boot-on;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		enable-active-high;
+		vin-supply = <&r43_vcc_3v3>;
+
+		regulator-state-mem {
+			regulator-off-in-suspend;
+		};
+	};
+
+	r43_panel_enable: panel-enable {
+		compatible = "regulator-fixed";
+		regulator-name = "panel_enable";
+		gpio = <&gpio1 21 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+		regulator-boot-on;
+		startup-delay-us = <20000>;
+		vin-supply = <&r43_vcc3v3_lcd1_n>;
+	};
+
+	gpu: gpu@fde60000 {
+		compatible = "rockchip,rk3568-mali", "arm,mali-bifrost";
+		reg = <0x0 0xfde60000 0x0 0x4000>;
+
+		interrupts = <0x0 0x27 0x4>,
+				<0x0 0x29 0x4>,
+				<0x0 0x28 0x4>;
+		interrupt-names = "GPU", "MMU", "JOB";
+
+		upthreshold = <0x28>;
+		downdifferential = <0x0a>;
+
+		clocks = <&scmi_clk 1>, <&cru 27>;
+		clock-names = "clk_mali", "clk_gpu";
+
+		power-domains = <&power 7>;
+		#cooling-cells = <2>;
+		operating-points-v2 = <&gpu_opp_table>;
+		status = "okay";
+	};
+
+	/* Original firmware panel: simple-panel over LVDS, with two timings. */
+	panel: panel {
+		compatible = "simple-panel";
+		power-supply = <&r43_vcc3v3_lcd1_n>;
+
+		/* From original decompiled DTS: gpio1 PD5 active-high. */
+		bl_enable-gpios = <&gpio1 13 GPIO_ACTIVE_HIGH>;
+		/*
+		 * Original firmware uses enable-gpios = <&gpio1 21 GPIO_ACTIVE_HIGH>.
+		 * On this 5.10 bring-up that line dropped low after fbcon started, so
+		 * r43_panel_enable owns it as an always-on fixed regulator for now.
+		 */
+
+		enable-delay-ms = <20>;
+		prepare-delay-ms = <20>;
+		unprepare-delay-ms = <20>;
+		disable-delay-ms = <20>;
+		bus-format = <0x100a>;
+		width-mm = <105>;
+		height-mm = <70>;
+
+		display-timings {
+			/* The original firmware points native-mode at timing1. */
+			native-mode = <&timing1>;
+
+			timing0: timing0 {
+				clock-frequency = <68000000>;
+				hactive = <800>;
+				vactive = <1280>;
+				hback-porch = <30>;
+				hfront-porch = <30>;
+				vback-porch = <4>;
+				vfront-porch = <2>;
+				hsync-len = <4>;
+				vsync-len = <2>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+			};
+
+			timing1: timing1 {
+				clock-frequency = <11000000>;
+				hactive = <480>;
+				vactive = <272>;
+				hback-porch = <2>;
+				hfront-porch = <2>;
+				vback-porch = <2>;
+				vfront-porch = <2>;
+				hsync-len = <41>;
+				vsync-len = <10>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <1>;
+			};
+		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				panel_in_lvds: endpoint {
+					remote-endpoint = <&lvds_out_panel>;
+				};
+			};
+		};
+	};
+
+	adc-battery {
+		status = "okay";
+		compatible = "adc-battery";
+		io-channels = <&saradc 2>;
+		chg_ok_gpio = <&gpio1 20 GPIO_ACTIVE_HIGH>;
+		auto_calibration = <0>;
+		ref_voltage = <1800>;
+		/* Raw table preserved from original firmware DTS. */
+		bat_table = <0 0 0 0 14 10 3460 3556 3625 3694 3763 3832 3901 3970 4039 4108 4180 3730 3795 3848 3901 3954 4007 4060 4113 4166 4240 4280>;
+		is_usb_charge = <1>;
+	};
+
+	es8156_sound: es8156-sound {
+		status = "okay";
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,name = "rockchip,es8156-codec";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,widgets =
+			"Microphone", "Mic Jack",
+			"Headphone", "Headphone Jack";
+		simple-audio-card,routing =
+			"Mic Jack", "MICBIAS1",
+			"IN1P", "Mic Jack",
+			"Headphone Jack", "HPOL",
+			"Headphone Jack", "HPOR";
+
+		simple-audio-card,cpu {
+			sound-dai = <&i2s1_8ch>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&es8156>;
+		};
+	};
+
+	/* GPIO shoulder/trigger keys from original firmware. */
+	gpio_keys: gpio-keys {
+		status = "okay";
+		compatible = "gpio-keys";
+		autorepeat;
+
+		a_key {
+			gpios = <&gpio3 17 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_A>;
+			label = "GPIO Key A";
+			debounce-interval = <20>;
+		};
+
+		b_key {
+			gpios = <&gpio3 16 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_B>;
+			label = "GPIO Key B";
+			debounce-interval = <20>;
+		};
+
+		l_key {
+			gpios = <&gpio3 14 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_L>;
+			label = "GPIO Key L";
+			debounce-interval = <20>;
+		};
+
+		r_key {
+			gpios = <&gpio3 19 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_R>;
+			label = "GPIO Key R";
+			debounce-interval = <20>;
+		};
+
+		l2_key {
+			gpios = <&gpio3 15 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_C>;
+			label = "GPIO Key C";
+			debounce-interval = <20>;
+		};
+
+		r2_key {
+			gpios = <&gpio3 18 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_Z>;
+			label = "GPIO Key Z";
+			debounce-interval = <20>;
+		};
+	};
+
+	adc_keys: adc-keys {
+		compatible = "adc-keys";
+		io-channels = <&saradc 0>;
+		io-channel-names = "buttons";
+		poll-interval = <100>;
+		keyup-threshold-microvolt = <1800000>;
+		autorepeat;
+
+		vol-down {
+			label = "Volume Down";
+			linux,code = <KEY_VOLUMEDOWN>;
+			press-threshold-microvolt = <162000>;
+		};
+
+		vol-up {
+			label = "Volume Up";
+			linux,code = <KEY_VOLUMEUP>;
+			press-threshold-microvolt = <600000>;
+		};
+	};
+
+	i2c_keys: i2c-keys {
+		compatible = "i2c-keys";
+		autorepeat;
+
+		up_key {
+			linux,code = <KEY_UP>;
+		};
+
+		down_key {
+			linux,code = <KEY_DOWN>;
+		};
+
+		left_key {
+			linux,code = <KEY_LEFT>;
+		};
+
+		right_key {
+			linux,code = <KEY_RIGHT>;
+		};
+
+		a_key {
+			linux,code = <KEY_A>;
+		};
+
+		b_key {
+			linux,code = <KEY_B>;
+		};
+
+		x_key {
+			linux,code = <KEY_X>;
+		};
+
+		y_key {
+			linux,code = <KEY_Y>;
+		};
+
+		select_key {
+			linux,code = <KEY_RIGHTSHIFT>;
+		};
+
+		start_key {
+			linux,code = <KEY_ENTER>;
+		};
+
+		mode_key {
+			linux,code = <KEY_END>;
+		};
+
+		thumbl_key {
+			linux,code = <BTN_THUMBL>;
+		};
+
+		thumbr_key {
+			linux,code = <BTN_THUMBR>;
+		};
+
+		l_key {
+			linux,code = <KEY_L>;
+		};
+
+		r_key {
+			linux,code = <KEY_R>;
+		};
+
+		l2_key {
+			linux,code = <KEY_C>;
+		};
+
+		r2_key {
+			linux,code = <KEY_Z>;
+		};
+	};
+};
+
+/* Keep the EVB cursor assignment. */
+&vp0 {
+	cursor-win-id = <ROCKCHIP_VOP2_CLUSTER0>;
+};
+
+/* Match the original firmware display path: VOP VP1 -> LVDS -> simple-panel. */
+&route_dsi0 { status = "disabled"; };
+&route_dsi1 { status = "disabled"; };
+&route_edp { status = "disabled"; };
+&route_hdmi { status = "disabled"; };
+&route_rgb { status = "disabled"; };
+
+&route_lvds {
+	status = "okay";
+	connect = <&vp1_out_lvds>;
+};
+
+&lvds {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+
+			lvds_out_panel: endpoint {
+				remote-endpoint = <&panel_in_lvds>;
+			};
+		};
+	};
+};
+
+&lvds_in_vp1 {
+	status = "okay";
+	remote-endpoint = <&vp1_out_lvds>;
+};
+
+&lvds_in_vp2 {
+	status = "disabled";
+};
+
+&vp1_out_lvds {
+	status = "okay";
+	remote-endpoint = <&lvds_in_vp1>;
+};
+
+&vp2_out_lvds {
+	status = "disabled";
+};
+
+/* Disable non-R43 display outputs for this phase. */
+&dsi0 { status = "disabled"; };
+&dsi1 { status = "disabled"; };
+&edp { status = "disabled"; };
+&hdmi { status = "disabled"; };
+
+/* Original firmware has PCIe disabled; this also stops the boot-time PCIe spam. */
+&pcie2x1 {
+	status = "disabled";
+};
+
+/* The R43 handheld has no wired Ethernet PHY; disable EVB-inherited GMAC1. */
+&gmac1 {
+	status = "disabled";
+};
+
+&gmac_uio1 {
+	status = "disabled";
+};
+
+/* Storage layout from original firmware: SD on sdmmc0, sdmmc1 disabled, eMMC/SDHCI okay, SFC okay. */
+&sdmmc0 {
+	status = "okay";
+
+	/delete-property/ vmmc-supply;
+	/delete-property/ vqmmc-supply;
+	/delete-property/ sd-uhs-sdr12;
+	/delete-property/ sd-uhs-sdr25;
+	/delete-property/ sd-uhs-sdr50;
+	/delete-property/ sd-uhs-sdr104;
+	/delete-property/ cap-mmc-highspeed;
+	/delete-property/ cd-gpios;
+	/delete-property/ max-frequency;
+
+	no-1-8-v;
+	supports-sd;
+	bus-width = <4>;
+
+	cap-sd-highspeed;
+	disable-wp;
+	no-sdio;
+	no-mmc;
+	non-removable;
+
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc0_clk &sdmmc0_cmd &sdmmc0_bus4>;
+
+	max-frequency = <50000000>;
+};
+&sdmmc1 {
+	status = "disabled";
+};
+
+&sdhci {
+	status = "okay";
+	bus-width = <8>;
+	supports-emmc;
+	non-removable;
+	max-frequency = <200000000>;
+};
+
+&sfc {
+	status = "okay";
+};
+
+&{/nandc@fe330000} {
+	status = "okay";
+};
+
+/* Original firmware: i2c1/i2c2/i2c4/i2c5 disabled; i2c3 has ES8156. */
+&i2c1 { status = "disabled"; };
+&i2c2 { status = "disabled"; };
+&i2c4 { status = "disabled"; };
+&i2c5 { status = "disabled"; };
+
+&i2c0 {
+	status = "okay";
+
+	i2ckey@19 {
+		compatible = "key_i2c3";
+		reg = <0x19>;
+	};
+};
+
+&i2c3 {
+	status = "okay";
+
+	/* Diagnostic node present in original firmware DTS. */
+	checki2c@43 {
+		compatible = "seci2c1";
+		reg = <0x43>;
+	};
+
+	es8156: es8156@8 {
+		#sound-dai-cells = <0>;
+		compatible = "everest,es8156";
+		status = "okay";
+		reg = <0x08>;
+		/* MCLK properties intentionally omitted for this phase: clock IDs differ in this BSP. */
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2s1m0_mclk>;
+		spk-con-gpio = <&gpio1 10 GPIO_ACTIVE_LOW>;
+		hp-det-gpio = <&gpio1 23 GPIO_ACTIVE_LOW>;
+		hp-ctl-gpio = <&gpio1 22 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&i2s0_8ch {
+	status = "okay";
+};
+
+&i2s1_8ch {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2s1m0_lrckrx &i2s1m0_lrcktx &i2s1m0_mclk &i2s1m0_sclktx &i2s1m0_sdi0 &i2s1m0_sdo0>;
+	rockchip,clk-trcm = <1>;
+};
+
+&saradc {
+	status = "okay";
+	vref-supply = <&r43_vcc_1v8>;
+};
+
+&usb2phy0 {
+	status = "okay";
+};
+
+&u2phy0_otg {
+	status = "okay";
+};
+
+&usbdrd30 {
+	status = "okay";
+};
+
+&usbdrd_dwc3 {
+	dr_mode = "otg";
+	status = "okay";
+};
+
+&gpu {
+	compatible = "rockchip,rk3568-mali", "arm,mali-bifrost";
+	mali-supply = <&r43_vdd_gpu>;
+	mem-supply = <&r43_vdd_gpu>;
+
+	interrupts = <0x0 0x27 0x4>,
+		     <0x0 0x29 0x4>,
+		     <0x0 0x28 0x4>;
+	interrupt-names = "GPU", "MMU", "JOB";
+
+	status = "okay";
+};
+
+&gpu_opp_table {
+	/delete-property/ rockchip,low-temp;
+	/delete-property/ rockchip,low-temp-adjust-volt;
+
+	opp-200000000 {
+		opp-microvolt = <1000000 1000000>;
+	};
+
+	opp-300000000 {
+		opp-microvolt = <1000000 1000000>;
+	};
+
+	opp-400000000 {
+		opp-microvolt = <1000000 1000000>;
+	};
+
+	opp-600000000 {
+		opp-microvolt = <1000000 1000000>;
+	};
+
+	opp-700000000 {
+		opp-microvolt = <1000000 1000000>;
+	};
+
+	opp-800000000 {
+		opp-microvolt = <1000000 1000000>;
+	};
+};
