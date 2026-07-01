@@ -36,6 +36,18 @@ static const struct r43_key default_keys[] = {
 	{ KEY_END, 1, 0x80 }, /* Home Button */
 };
 
+static int r43_i2c_keys_use_defaults(struct device *dev,
+				      struct r43_i2c_keys_data *ddata)
+{
+	dev_info(dev, "Using hardcoded R43 I2C key defaults\n");
+
+	ddata->nkeys = ARRAY_SIZE(default_keys);
+	ddata->keys = devm_kmemdup(dev, default_keys, sizeof(default_keys),
+				   GFP_KERNEL);
+
+	return ddata->keys ? 0 : -ENOMEM;
+}
+
 static void r43_i2c_keys_work(struct work_struct *work)
 {
 	struct r43_i2c_keys_data *ddata = container_of(work, struct r43_i2c_keys_data, work.work);
@@ -91,11 +103,9 @@ static int r43_i2c_keys_probe(struct i2c_client *client,
 
 	nkeys = device_get_child_node_count(&client->dev);
 	if (nkeys == 0) {
-		dev_info(&client->dev, "No child nodes found in DTB, using hardcoded defaults\n");
-		ddata->nkeys = ARRAY_SIZE(default_keys);
-		ddata->keys = devm_kmemdup(&client->dev, default_keys, sizeof(default_keys), GFP_KERNEL);
-		if (!ddata->keys)
-			return -ENOMEM;
+		ret = r43_i2c_keys_use_defaults(&client->dev, ddata);
+		if (ret)
+			return ret;
 	} else {
 		dev_info(&client->dev, "Found %d child nodes in DTB\n", nkeys);
 		ddata->nkeys = nkeys;
@@ -123,6 +133,11 @@ static int r43_i2c_keys_probe(struct i2c_client *client,
 			i++;
 		}
 		ddata->nkeys = i; /* Actual valid keys parsed */
+		if (ddata->nkeys == 0) {
+			ret = r43_i2c_keys_use_defaults(&client->dev, ddata);
+			if (ret)
+				return ret;
+		}
 	}
 
 	/* Enable capabilities for mapped keys */
